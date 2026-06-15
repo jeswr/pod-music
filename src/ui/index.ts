@@ -22,6 +22,7 @@ export {
   ensureTrailingSlash,
   iriTail,
   isAccessDenied,
+  isSafeContainedIri,
   kindLabel,
   LIBRARY_KINDS,
   type LibraryItem,

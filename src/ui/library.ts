@@ -93,6 +93,50 @@ export function containerForKind(layout: MusicLayout, kind: LibraryKind): string
 }
 
 /**
+ * Is `iri` a SAFE in-pod child of `containerIri` that we are willing to fetch?
+ *
+ * A container listing is untrusted input: a malicious or malformed container can
+ * emit `ldp:contains` objects pointing anywhere — a `javascript:`/`data:`/`file:`
+ * URI, a cross-origin host, or a path outside the container root. Fetching those
+ * blindly is an SSRF-ish vector (and runs BEFORE any href safety gate, so it is
+ * the only guard for a server-side consumer of {@link loadLibrary}). We therefore
+ * fetch a contained IRI ONLY when ALL of the following hold:
+ *
+ *  - it parses as an absolute URL with an `http:` or `https:` scheme (never
+ *    `javascript:`/`data:`/`file:`/`blob:`/relative);
+ *  - it is SAME-ORIGIN with the container (scheme + host + port all match);
+ *  - it is strictly UNDER the container path — its href starts with the
+ *    (slash-terminated) container href and has a non-empty remainder, i.e. it is
+ *    a real descendant, not the container itself nor a sibling/parent.
+ *
+ * Anything else is dropped from the listing rather than fetched. The origin check
+ * is done on parsed `URL.origin` (not raw string prefixing) so it cannot be
+ * fooled by a userinfo/`@` or a look-alike-prefix host.
+ */
+export function isSafeContainedIri(containerIri: string, iri: string): boolean {
+  let container: URL;
+  let child: URL;
+  try {
+    container = new URL(containerIri);
+    child = new URL(iri);
+  } catch {
+    return false;
+  }
+  if (child.protocol !== "http:" && child.protocol !== "https:") {
+    return false;
+  }
+  if (child.origin !== container.origin) {
+    return false;
+  }
+  // Path-prefix under the (slash-terminated) container root, with a real child
+  // segment after it. Compare hrefs so origin (already equal) + path are checked
+  // together; require a strict, non-empty remainder so the container itself,
+  // a parent, or a sibling cannot pass.
+  const root = container.href.endsWith("/") ? container.href : `${container.href}/`;
+  return child.href.length > root.length && child.href.startsWith(root);
+}
+
+/**
  * Read one resource into a display row. The title is read via the store's safe
  * label resolver (schema:name → dcterms:title → rdfs:label → IRI tail) rather
  * than the wrapper's `Required` `title` getter — that getter THROWS when a
@@ -147,6 +191,16 @@ async function readItem(store: MusicStore, kind: LibraryKind, iri: string): Prom
  * rejects and is surfaced by the hook (see {@link readItem}) rather than
  * silently dropping a row.
  *
+ * The container listing is UNTRUSTED: each `ldp:contains` IRI is validated by
+ * {@link isSafeContainedIri} before it is fetched, so a malicious/malformed
+ * container cannot drive a request to a `javascript:`/`data:`/`file:`,
+ * cross-origin, or out-of-pod URL (an SSRF-ish vector — this guard runs BEFORE
+ * any href safety gate and is the only guard for a server-side consumer). An
+ * unsafe contained IRI is DROPPED from the listing, not fetched and not failed:
+ * it never reaches {@link readItem}, mirroring the per-item resilience that keeps
+ * one bad child from sinking the whole listing. A legitimate child that 401/403s
+ * still rejects as before.
+ *
  * Reads run concurrently. There is no cancellation here: the data layer
  * (`MusicStore`) exposes no per-read abort signal, so an in-flight load always
  * runs to completion. STALENESS is handled entirely by the caller — the hook's
@@ -157,7 +211,8 @@ async function readItem(store: MusicStore, kind: LibraryKind, iri: string): Prom
 export async function loadLibrary(store: MusicStore, kind: LibraryKind): Promise<LibraryItem[]> {
   const container = containerForKind(store.layout, kind);
   const iris = await store.listContainer(container);
-  const items = await Promise.all(iris.map((iri) => readItem(store, kind, iri)));
+  const safe = iris.filter((iri) => isSafeContainedIri(container, iri));
+  const items = await Promise.all(safe.map((iri) => readItem(store, kind, iri)));
   return items.sort((a, b) => a.title.localeCompare(b.title, undefined, { sensitivity: "base" }));
 }
 

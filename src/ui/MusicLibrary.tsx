@@ -180,13 +180,17 @@ export function MusicLibrary({ base, fetch, initialKind, title }: MusicLibraryPr
                 <td className="pod-music-item-title">{item.title}</td>
                 <MetaCells kind={kind} item={item} />
                 <td className="pod-music-open">
-                  {isSafeHref(item.iri) ? (
-                    <a href={item.iri} target="_blank" rel="noopener noreferrer">
-                      Open
-                    </a>
-                  ) : (
-                    <span className="pod-music-open-disabled">—</span>
-                  )}
+                  {/* `item.iri` is always a safe, same-origin, in-pod http(s)
+                      child: `loadLibrary` validates every contained IRI via
+                      `isSafeContainedIri` before it can become a row, so a
+                      `javascript:`/`data:`/cross-origin resource IRI never
+                      reaches here. The Open link is therefore unconditionally
+                      safe. (Artist/album refs come from the resource's own RDF,
+                      not the container listing, so `ReferenceCell` still gates
+                      THOSE hrefs.) */}
+                  <a href={item.iri} target="_blank" rel="noopener noreferrer">
+                    Open
+                  </a>
                 </td>
               </tr>
             ))}
