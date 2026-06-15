@@ -296,6 +296,13 @@ export class Playlist extends TermWrapper {
    * The ordered track IRIs on the playlist, read from the `schema:ListItem`
    * entries sorted by `schema:position`. Returns a detached array — mutating it
    * never writes back to the dataset (use addTrack / removeAt / setTracks).
+   *
+   * Backward-compatible read: if a playlist carries NO ordered entries but DOES
+   * carry legacy flat `schema:track` / `mo:track` triples (an older or
+   * third-party representation), those are read instead — so the next mutation
+   * (which routes through setTracks) migrates them into the ordered form rather
+   * than silently dropping them. Flat order is unspecified, so we read the
+   * deduplicated flat set in a stable (lexicographic) order.
    */
   tracks(): string[] {
     const entries: { position: number; item: string }[] = [];
@@ -304,6 +311,13 @@ export class Playlist extends TermWrapper {
       const position = RequiredFrom.subjectPredicate(wrapped, SCHEMA_POSITION, LiteralAs.number);
       const item = RequiredFrom.subjectPredicate(wrapped, SCHEMA_ITEM, NamedNodeAs.string);
       entries.push({ position, item });
+    }
+    if (entries.length === 0) {
+      const flat = iriSet(this, SCHEMA_TRACK);
+      for (const t of iriSet(this, MO_TRACK_PROP)) {
+        flat.add(t);
+      }
+      return [...flat].sort();
     }
     entries.sort((a, b) => a.position - b.position);
     return entries.map((e) => e.item);

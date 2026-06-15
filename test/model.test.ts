@@ -231,20 +231,24 @@ describe("Playlist", () => {
     expect(playlist.tracks()).toEqual([TRACK, t2]);
   });
 
-  it("setTracks strips flat schema:track / mo:track triples (ordered form is authoritative)", async () => {
+  it("reads legacy flat schema:track / mo:track playlists and migrates them on mutation", async () => {
     const turtle = `
       @prefix mo: <http://purl.org/ontology/mo/> .
       @prefix schema: <http://schema.org/> .
       <${PLAYLIST}> a mo:Playlist ; schema:name "Legacy" ;
         schema:track <${TRACK}> ;
-        mo:track <${TRACK}> .
+        mo:track <${t2}> .
     `;
     const dataset = await parseTurtle(turtle, PLAYLIST);
     const playlist = new Playlist(PLAYLIST, dataset, factory);
-    expect(playlist.tracks()).toEqual([]); // flat predicates are not read as ordered entries
-    playlist.setTracks([t2]);
-    expect(playlist.tracks()).toEqual([t2]);
-    // the flat predicates are gone — no mixed state remains
+    // a flat-only playlist is read (deduped, stable order) — NOT dropped
+    expect(playlist.tracks()).toEqual([TRACK, t2].sort());
+
+    // a mutation migrates the flat tracks into ordered entries without loss
+    playlist.addTrack(t3);
+    expect(playlist.tracks()).toEqual([...[TRACK, t2].sort(), t3]);
+
+    // the flat predicates are gone — no mixed state remains after migration
     const subject = factory.namedNode(PLAYLIST);
     expect([...dataset.match(subject, factory.namedNode(SCHEMA_TRACK))]).toHaveLength(0);
     expect([...dataset.match(subject, factory.namedNode(MO_TRACK_PROP))]).toHaveLength(0);
