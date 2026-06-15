@@ -3,7 +3,12 @@
     "target": "ES2022",
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
-    "lib": ["ES2022"],
+    // DOM + DOM.Iterable are needed by the optional React `./ui` surface (it
+    // renders to the DOM and reads `fetch`/`Response`). The data-layer core does
+    // not use them, but one lib set keeps a single tsconfig for the whole tree.
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    // The React `./ui` is JSX; the automatic runtime needs no `import React`.
+    "jsx": "react-jsx",
     "types": ["node"],
     "strict": true,
     "noUncheckedIndexedAccess": true,
