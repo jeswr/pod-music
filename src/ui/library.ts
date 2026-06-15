@@ -105,13 +105,17 @@ export function containerForKind(layout: MusicLayout, kind: LibraryKind): string
  *  - it parses as an absolute URL with an `http:` or `https:` scheme (never
  *    `javascript:`/`data:`/`file:`/`blob:`/relative);
  *  - it is SAME-ORIGIN with the container (scheme + host + port all match);
- *  - it is strictly UNDER the container path — its href starts with the
- *    (slash-terminated) container href and has a non-empty remainder, i.e. it is
- *    a real descendant, not the container itself nor a sibling/parent.
+ *  - it is strictly UNDER the container path — its parsed `URL.pathname` starts
+ *    with the (slash-terminated) container pathname AND has a non-empty path
+ *    remainder after it, i.e. it is a real descendant, not the container itself
+ *    nor a sibling/parent.
  *
  * Anything else is dropped from the listing rather than fetched. The origin check
  * is done on parsed `URL.origin` (not raw string prefixing) so it cannot be
- * fooled by a userinfo/`@` or a look-alike-prefix host.
+ * fooled by a userinfo/`@` or a look-alike-prefix host. The "under the container"
+ * check is done on `URL.pathname` (NOT the raw href) so a `?query`/`#fragment` on
+ * the container itself — `…/tracks/?x` or `…/tracks/#x`, which are self-fetches,
+ * not children — cannot smuggle a non-empty href remainder past the guard.
  */
 export function isSafeContainedIri(containerIri: string, iri: string): boolean {
   let container: URL;
@@ -129,11 +133,13 @@ export function isSafeContainedIri(containerIri: string, iri: string): boolean {
     return false;
   }
   // Path-prefix under the (slash-terminated) container root, with a real child
-  // segment after it. Compare hrefs so origin (already equal) + path are checked
-  // together; require a strict, non-empty remainder so the container itself,
-  // a parent, or a sibling cannot pass.
-  const root = container.href.endsWith("/") ? container.href : `${container.href}/`;
-  return child.href.length > root.length && child.href.startsWith(root);
+  // segment after it. Compare on parsed `URL.pathname` (origin is already equal)
+  // so a `?query`/`#fragment` on the container itself cannot inflate the
+  // remainder: `…/tracks/?x` and `…/tracks/#x` have pathname `/…/tracks/` (no
+  // path remainder) and so are rejected as self-fetches, while a genuine child
+  // — even one carrying its own query/fragment — has a non-empty path remainder.
+  const root = container.pathname.endsWith("/") ? container.pathname : `${container.pathname}/`;
+  return child.pathname.length > root.length && child.pathname.startsWith(root);
 }
 
 /**

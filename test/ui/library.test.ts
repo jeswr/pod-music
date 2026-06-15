@@ -285,6 +285,23 @@ describe("isSafeContainedIri", () => {
     expect(isSafeContainedIri(container, BASE)).toBe(false);
   });
 
+  it("rejects the container itself carrying a query or fragment (self-fetch)", () => {
+    // A `?query`/`#fragment` on the CONTAINER is not a child resource — it is the
+    // container itself (self-fetch). The raw href would have a non-empty suffix
+    // after the root string, but the parsed pathname does not, so it is rejected.
+    expect(isSafeContainedIri(container, `${container}?x`)).toBe(false);
+    expect(isSafeContainedIri(container, `${container}#x`)).toBe(false);
+    expect(isSafeContainedIri(container, `${container}?a=1&b=2`)).toBe(false);
+    expect(isSafeContainedIri(container, `${container}#frag/looks/like/path`)).toBe(false);
+  });
+
+  it("accepts a real child even when it carries its own query or fragment", () => {
+    expect(isSafeContainedIri(container, `${container}song1`)).toBe(true);
+    expect(isSafeContainedIri(container, `${container}song1?x`)).toBe(true);
+    expect(isSafeContainedIri(container, `${container}song1#x`)).toBe(true);
+    expect(isSafeContainedIri(container, `${container}song1?v=2#frag`)).toBe(true);
+  });
+
   it("rejects an unparseable child or container IRI", () => {
     expect(isSafeContainedIri(container, "not a url")).toBe(false);
     expect(isSafeContainedIri("also not a url", `${container}reverie`)).toBe(false);
