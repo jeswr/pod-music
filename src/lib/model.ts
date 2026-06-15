@@ -10,6 +10,7 @@
 // These are pure in-memory wrappers over a dataset; the pod I/O (fetch / PUT /
 // list) lives in store.ts, which composes them with @jeswr/fetch-rdf + n3.Writer.
 
+import type { Term } from "@rdfjs/types";
 import {
   LiteralAs,
   LiteralFrom,
@@ -29,13 +30,15 @@ import {
   MO_RECORD,
   MO_TRACK,
   MO_TRACK_NUMBER,
-  MO_TRACK_PROP,
   RDF_TYPE,
   SCHEMA_AGENT,
   SCHEMA_BY_ARTIST,
   SCHEMA_DURATION,
   SCHEMA_END_TIME,
   SCHEMA_IN_ALBUM,
+  SCHEMA_ITEM,
+  SCHEMA_ITEM_LIST_ELEMENT,
+  SCHEMA_LIST_ITEM,
   SCHEMA_LISTEN_ACTION,
   SCHEMA_MUSIC_ALBUM,
   SCHEMA_MUSIC_GROUP,
@@ -44,6 +47,7 @@ import {
   SCHEMA_NAME,
   SCHEMA_NUM_TRACKS,
   SCHEMA_OBJECT,
+  SCHEMA_POSITION,
   SCHEMA_START_TIME,
   SCHEMA_TRACK,
 } from "../vocab/iris.js";
@@ -87,9 +91,18 @@ function requireNonEmpty(value: string, field: string): string {
   return value;
 }
 
-function requireNonNegative(value: number, field: string): number {
-  if (!Number.isFinite(value) || value < 0) {
-    throw new InvalidModelError(`${field} must be a finite, non-negative number (got ${value})`);
+/** A non-negative integer (counts, durations-in-seconds). */
+function requireNonNegativeInteger(value: number, field: string): number {
+  if (!Number.isInteger(value) || value < 0) {
+    throw new InvalidModelError(`${field} must be a non-negative integer (got ${value})`);
+  }
+  return value;
+}
+
+/** A positive integer (1-based positions such as a track number). */
+function requirePositiveInteger(value: number, field: string): number {
+  if (!Number.isInteger(value) || value < 1) {
+    throw new InvalidModelError(`${field} must be a positive (1-based) integer (got ${value})`);
   }
   return value;
 }
@@ -161,7 +174,7 @@ export class Track extends TermWrapper {
     OptionalAs.object(
       this,
       MO_TRACK_NUMBER,
-      value === undefined ? undefined : requireNonNegative(value, "Track.trackNumber"),
+      value === undefined ? undefined : requirePositiveInteger(value, "Track.trackNumber"),
       LiteralFrom.integer,
     );
   }
@@ -172,7 +185,7 @@ export class Track extends TermWrapper {
   }
   set durationSeconds(value: number | undefined) {
     const checked =
-      value === undefined ? undefined : requireNonNegative(value, "Track.durationSeconds");
+      value === undefined ? undefined : requireNonNegativeInteger(value, "Track.durationSeconds");
     OptionalAs.object(this, SCHEMA_DURATION, checked, LiteralFrom.integer);
     OptionalAs.object(this, MO_DURATION, checked, LiteralFrom.integer);
   }
@@ -235,7 +248,7 @@ export class Album extends TermWrapper {
     OptionalAs.object(
       this,
       SCHEMA_NUM_TRACKS,
-      value === undefined ? undefined : requireNonNegative(value, "Album.numTracks"),
+      value === undefined ? undefined : requireNonNegativeInteger(value, "Album.numTracks"),
       LiteralFrom.integer,
     );
   }
@@ -248,10 +261,18 @@ export class Album extends TermWrapper {
 }
 
 /**
- * A user-curated playlist — mo:Playlist + schema:MusicPlaylist. An ORDERED list
- * of track IRIs (order preserved as an array, serialised as repeated
- * schema:track triples with mo:track_number unavailable on the playlist itself,
- * so order is held in the array view and re-emitted deterministically).
+ * A user-curated playlist — mo:Playlist + schema:MusicPlaylist.
+ *
+ * Order matters and duplicate tracks are allowed, so the playlist is a genuine
+ * ORDERED list: each entry is a `schema:ListItem` linked from the playlist via
+ * `schema:itemListElement`, carrying a 1-based `schema:position` and a
+ * `schema:item` IRI pointing at the track. This round-trips losslessly through
+ * Turtle (order is encoded in positions, not in triple emission order) and
+ * permits the same track to appear more than once.
+ *
+ * The whole entry list is rewritten on every mutation (read positions → mutate
+ * the array → re-write contiguous 1..n positions), which keeps positions dense
+ * and the model trivially correct.
  */
 export class Playlist extends TermWrapper {
   get types(): Set<string> {
@@ -271,43 +292,91 @@ export class Playlist extends TermWrapper {
   }
 
   /**
-   * The set of track IRIs on the playlist (schema:track ∪ mo:track), as a
-   * detached snapshot — iterating it never writes back to the dataset.
+   * The ordered track IRIs on the playlist, read from the `schema:ListItem`
+   * entries sorted by `schema:position`. Returns a detached array — mutating it
+   * never writes back to the dataset (use addTrack / removeAt / setTracks).
    */
-  get trackIris(): Set<string> {
-    const out = iriSet(this, SCHEMA_TRACK);
-    for (const t of iriSet(this, MO_TRACK_PROP)) {
-      out.add(t);
+  tracks(): string[] {
+    const entries: { position: number; item: string }[] = [];
+    for (const listItem of this.matchObjects(SCHEMA_ITEM_LIST_ELEMENT)) {
+      const wrapped = new TermWrapper(listItem, this.dataset, this.factory);
+      const position = RequiredFrom.subjectPredicate(wrapped, SCHEMA_POSITION, LiteralAs.number);
+      const item = RequiredFrom.subjectPredicate(wrapped, SCHEMA_ITEM, NamedNodeAs.string);
+      entries.push({ position, item });
+    }
+    entries.sort((a, b) => a.position - b.position);
+    return entries.map((e) => e.item);
+  }
+
+  /** The objects of a predicate on this subject, as raw terms. */
+  private matchObjects(predicate: string): Term[] {
+    const out: Term[] = [];
+    for (const quad of this.dataset.match(
+      this as never,
+      this.factory.namedNode(predicate),
+      undefined,
+      undefined,
+    )) {
+      out.push(quad.object);
     }
     return out;
   }
 
-  /** Append a track IRI (idempotent, written to both schema:track and mo:track). */
-  addTrack(trackIri: string): this {
-    requireNonEmpty(trackIri, "Playlist.addTrack(trackIri)");
-    const existing = this.trackIris;
-    if (!existing.has(trackIri)) {
-      const node = this.factory.namedNode(trackIri);
-      this.dataset.add(
-        this.factory.quad(this as never, this.factory.namedNode(SCHEMA_TRACK), node),
-      );
-      this.dataset.add(
-        this.factory.quad(this as never, this.factory.namedNode(MO_TRACK_PROP), node),
+  /** Replace the entire ordered track list (positions are re-densified 1..n). */
+  setTracks(trackIris: readonly string[]): this {
+    for (const iri of trackIris) {
+      requireNonEmpty(iri, "Playlist.setTracks(trackIris)");
+    }
+    // delete every existing list item + its link, then re-emit contiguously.
+    for (const listItem of this.matchObjects(SCHEMA_ITEM_LIST_ELEMENT)) {
+      for (const quad of [...this.dataset.match(listItem, undefined, undefined, undefined)]) {
+        this.dataset.delete(quad);
+      }
+      this.dataset.delete(
+        this.factory.quad(
+          this as never,
+          this.factory.namedNode(SCHEMA_ITEM_LIST_ELEMENT),
+          listItem as never,
+        ),
       );
     }
+    trackIris.forEach((iri, index) => {
+      const listItem = this.factory.blankNode();
+      this.dataset.add(
+        this.factory.quad(
+          this as never,
+          this.factory.namedNode(SCHEMA_ITEM_LIST_ELEMENT),
+          listItem,
+        ),
+      );
+      const entry = new TermWrapper(listItem, this.dataset, this.factory);
+      this.dataset.add(
+        this.factory.quad(
+          listItem,
+          this.factory.namedNode(RDF_TYPE),
+          this.factory.namedNode(SCHEMA_LIST_ITEM),
+        ),
+      );
+      RequiredAs.object(entry, SCHEMA_POSITION, index + 1, LiteralFrom.integer);
+      RequiredAs.object(entry, SCHEMA_ITEM, iri, NamedNodeFrom.string);
+    });
     return this;
   }
 
-  /** Remove a track IRI from the playlist (both predicates). */
-  removeTrack(trackIri: string): this {
-    const node = this.factory.namedNode(trackIri);
-    this.dataset.delete(
-      this.factory.quad(this as never, this.factory.namedNode(SCHEMA_TRACK), node),
-    );
-    this.dataset.delete(
-      this.factory.quad(this as never, this.factory.namedNode(MO_TRACK_PROP), node),
-    );
-    return this;
+  /** Append a track IRI to the end of the playlist (duplicates allowed). */
+  addTrack(trackIri: string): this {
+    requireNonEmpty(trackIri, "Playlist.addTrack(trackIri)");
+    return this.setTracks([...this.tracks(), trackIri]);
+  }
+
+  /** Remove the entry at the given 0-based index. Out-of-range is a no-op. */
+  removeAt(index: number): this {
+    const current = this.tracks();
+    if (index < 0 || index >= current.length) {
+      return this;
+    }
+    current.splice(index, 1);
+    return this.setTracks(current);
   }
 
   stampType(): this {

@@ -100,17 +100,26 @@ describe("Track", () => {
     }).toThrow(InvalidModelError);
   });
 
-  it("rejects a negative or non-finite trackNumber and duration", () => {
+  it("enforces a positive-integer trackNumber (rejects 0, negative, fractional, NaN)", () => {
     const track = new Track(TRACK, emptyDataset(), factory).stampType();
-    expect(() => {
-      track.trackNumber = -1;
-    }).toThrow(InvalidModelError);
-    expect(() => {
-      track.durationSeconds = Number.NaN;
-    }).toThrow(InvalidModelError);
-    expect(() => {
-      track.durationSeconds = -5;
-    }).toThrow(InvalidModelError);
+    for (const bad of [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(() => {
+        track.trackNumber = bad;
+      }).toThrow(InvalidModelError);
+    }
+    track.trackNumber = 1; // a valid 1-based position
+    expect(track.trackNumber).toBe(1);
+  });
+
+  it("enforces a non-negative-integer duration (rejects negative, fractional, NaN; allows 0)", () => {
+    const track = new Track(TRACK, emptyDataset(), factory).stampType();
+    for (const bad of [-5, 12.34, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(() => {
+        track.durationSeconds = bad;
+      }).toThrow(InvalidModelError);
+    }
+    track.durationSeconds = 0; // zero-length is permitted
+    expect(track.durationSeconds).toBe(0);
   });
 });
 
@@ -163,57 +172,93 @@ describe("Album", () => {
     expect(album.numTracks).toBeUndefined();
   });
 
-  it("rejects an empty title, empty track IRI, and negative numTracks", () => {
+  it("rejects an empty title, empty track IRI, and a non-integer/negative numTracks", () => {
     const album = new Album(ALBUM, emptyDataset(), factory).stampType();
     expect(() => {
       album.title = "";
     }).toThrow(InvalidModelError);
     expect(() => album.addTrack("")).toThrow(InvalidModelError);
-    expect(() => {
-      album.numTracks = -2;
-    }).toThrow(InvalidModelError);
+    for (const bad of [-2, 3.5, Number.NaN]) {
+      expect(() => {
+        album.numTracks = bad;
+      }).toThrow(InvalidModelError);
+    }
+    album.numTracks = 0; // a non-negative integer is fine
+    expect(album.numTracks).toBe(0);
   });
 });
 
 describe("Playlist", () => {
-  it("stamps types, adds/removes tracks across schema:track and mo:track", async () => {
+  const t2 = "https://alice.example/music/tracks/t2";
+  const t3 = "https://alice.example/music/tracks/t3";
+
+  it("preserves order, allows duplicates, and round-trips losslessly", async () => {
     const playlist = new Playlist(PLAYLIST, emptyDataset(), factory).stampType();
     playlist.stampType();
     playlist.title = "Evening";
-    const t2 = "https://alice.example/music/tracks/t2";
     playlist.addTrack(TRACK);
-    playlist.addTrack(TRACK); // idempotent
     playlist.addTrack(t2);
+    playlist.addTrack(TRACK); // duplicate is allowed and kept
     expect(playlist.types.has(MO_PLAYLIST)).toBe(true);
     expect(playlist.types.has(SCHEMA_MUSIC_PLAYLIST)).toBe(true);
-    expect(playlist.trackIris).toEqual(new Set([TRACK, t2]));
-
-    playlist.removeTrack(t2);
-    expect(playlist.trackIris).toEqual(new Set([TRACK]));
+    expect(playlist.tracks()).toEqual([TRACK, t2, TRACK]);
 
     const back = await roundTrip(PLAYLIST, playlist.dataset, Playlist);
     expect(back.title).toBe("Evening");
-    expect(back.trackIris.has(TRACK)).toBe(true);
+    expect(back.tracks()).toEqual([TRACK, t2, TRACK]); // order + duplicates survive
   });
 
-  it("unions mo:track entries that lack a schema:track counterpart", async () => {
+  it("removeAt removes the entry at an index and re-densifies positions", () => {
+    const playlist = new Playlist(PLAYLIST, emptyDataset(), factory).stampType();
+    playlist.title = "L";
+    playlist.setTracks([TRACK, t2, t3]);
+    playlist.removeAt(1);
+    expect(playlist.tracks()).toEqual([TRACK, t3]);
+    // positions stay contiguous 1..n after removal — appending lands at the end
+    playlist.addTrack(t2);
+    expect(playlist.tracks()).toEqual([TRACK, t3, t2]);
+  });
+
+  it("removeAt is a no-op for an out-of-range index", () => {
+    const playlist = new Playlist(PLAYLIST, emptyDataset(), factory).stampType();
+    playlist.title = "L";
+    playlist.setTracks([TRACK, t2]);
+    playlist.removeAt(-1);
+    playlist.removeAt(5);
+    expect(playlist.tracks()).toEqual([TRACK, t2]);
+  });
+
+  it("setTracks replaces the entire list (and clears prior entries)", () => {
+    const playlist = new Playlist(PLAYLIST, emptyDataset(), factory).stampType();
+    playlist.title = "L";
+    playlist.setTracks([TRACK, t2, t3]);
+    playlist.setTracks([t3]);
+    expect(playlist.tracks()).toEqual([t3]);
+    playlist.setTracks([]);
+    expect(playlist.tracks()).toEqual([]);
+  });
+
+  it("reads order from schema:position regardless of triple emission order", async () => {
     const turtle = `
       @prefix mo: <http://purl.org/ontology/mo/> .
       @prefix schema: <http://schema.org/> .
       <${PLAYLIST}> a mo:Playlist ; schema:name "Mixed" ;
-        mo:track <https://alice.example/music/tracks/only-mo> .
+        schema:itemListElement
+          [ a schema:ListItem ; schema:position 2 ; schema:item <${t2}> ],
+          [ a schema:ListItem ; schema:position 1 ; schema:item <${TRACK}> ] .
     `;
     const dataset = await parseTurtle(turtle, PLAYLIST);
     const playlist = new Playlist(PLAYLIST, dataset, factory);
-    expect(playlist.trackIris.has("https://alice.example/music/tracks/only-mo")).toBe(true);
+    expect(playlist.tracks()).toEqual([TRACK, t2]); // sorted by position, not source order
   });
 
-  it("rejects an empty title and empty track IRI", () => {
+  it("rejects an empty title and empty track IRI (addTrack + setTracks)", () => {
     const playlist = new Playlist(PLAYLIST, emptyDataset(), factory).stampType();
     expect(() => {
       playlist.title = "";
     }).toThrow(InvalidModelError);
     expect(() => playlist.addTrack("")).toThrow(InvalidModelError);
+    expect(() => playlist.setTracks([TRACK, ""])).toThrow(InvalidModelError);
   });
 });
 

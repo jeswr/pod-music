@@ -45,11 +45,18 @@ export class TypeRegistration extends TermWrapper {
     OptionalAs.object(this, SOLID_FOR_CLASS, value, NamedNodeFrom.string);
   }
 
+  // A registration uses `solid:instance` (one resource) OR
+  // `solid:instanceContainer` (a container), never both — so setting one clears
+  // the counterpart, keeping the document spec-valid by construction.
+
   get instance(): string | undefined {
     return OptionalFrom.subjectPredicate(this, SOLID_INSTANCE, NamedNodeAs.string);
   }
   set instance(value: string | undefined) {
     OptionalAs.object(this, SOLID_INSTANCE, value, NamedNodeFrom.string);
+    if (value !== undefined) {
+      OptionalAs.object(this, SOLID_INSTANCE_CONTAINER, undefined, NamedNodeFrom.string);
+    }
   }
 
   get instanceContainer(): string | undefined {
@@ -57,6 +64,9 @@ export class TypeRegistration extends TermWrapper {
   }
   set instanceContainer(value: string | undefined) {
     OptionalAs.object(this, SOLID_INSTANCE_CONTAINER, value, NamedNodeFrom.string);
+    if (value !== undefined) {
+      OptionalAs.object(this, SOLID_INSTANCE, undefined, NamedNodeFrom.string);
+    }
   }
 
   /** Stamp the solid:TypeRegistration rdf:type. Idempotent. */

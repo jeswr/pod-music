@@ -41,6 +41,22 @@ describe("TypeRegistration", () => {
     reg.instanceContainer = undefined;
     expect(reg.instanceContainer).toBeUndefined();
   });
+
+  it("keeps solid:instance and solid:instanceContainer mutually exclusive", () => {
+    const reg = new TypeRegistration(`${DOC}#r3`, emptyDataset(), factory);
+    reg.stampType();
+    reg.forClass = MO_TRACK;
+    // setting a container then an instance must clear the container, and vice versa
+    reg.instanceContainer = TRACKS;
+    expect(reg.instanceContainer).toBe(TRACKS);
+    reg.instance = `${TRACKS}t1`;
+    expect(reg.instance).toBe(`${TRACKS}t1`);
+    expect(reg.instanceContainer).toBeUndefined();
+
+    reg.instanceContainer = TRACKS;
+    expect(reg.instanceContainer).toBe(TRACKS);
+    expect(reg.instance).toBeUndefined();
+  });
 });
 
 describe("TypeIndexDataset", () => {

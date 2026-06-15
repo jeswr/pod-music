@@ -23,10 +23,14 @@ export function emptyDataset(): Store {
 /**
  * Serialise a dataset to Turtle. The n3 Writer is callback-based; we promisify
  * it rather than awaiting it directly.
+ *
+ * RDF/JS `DatasetCore` does not itself guarantee iterability, so we enumerate
+ * quads via `match()` (which every DatasetCore implements) rather than casting
+ * to `Iterable<Quad>` — that keeps us correct for any conforming dataset.
  */
 export function serializeTurtle(dataset: DatasetCore): Promise<string> {
   const writer = new Writer({ format: "text/turtle" });
-  for (const quad of dataset as Iterable<Quad>) {
+  for (const quad of dataset.match() as Iterable<Quad>) {
     writer.addQuad(quad);
   }
   return new Promise<string>((resolve, reject) => {
