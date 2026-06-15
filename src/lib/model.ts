@@ -30,6 +30,7 @@ import {
   MO_RECORD,
   MO_TRACK,
   MO_TRACK_NUMBER,
+  MO_TRACK_PROP,
   RDF_TYPE,
   SCHEMA_AGENT,
   SCHEMA_BY_ARTIST,
@@ -322,7 +323,13 @@ export class Playlist extends TermWrapper {
     return out;
   }
 
-  /** Replace the entire ordered track list (positions are re-densified 1..n). */
+  /**
+   * Replace the entire ordered track list (positions are re-densified 1..n).
+   *
+   * Also strips any flat `schema:track` / `mo:track` triples on the playlist
+   * subject, so a playlist is never left in a mixed flat-plus-ordered state
+   * (the ordered `schema:itemListElement` form is the single source of truth).
+   */
   setTracks(trackIris: readonly string[]): this {
     for (const iri of trackIris) {
       requireNonEmpty(iri, "Playlist.setTracks(trackIris)");
@@ -339,6 +346,19 @@ export class Playlist extends TermWrapper {
           listItem as never,
         ),
       );
+    }
+    // strip any flat track predicates so the ordered form is authoritative.
+    for (const predicate of [SCHEMA_TRACK, MO_TRACK_PROP]) {
+      for (const quad of [
+        ...this.dataset.match(
+          this as never,
+          this.factory.namedNode(predicate),
+          undefined,
+          undefined,
+        ),
+      ]) {
+        this.dataset.delete(quad);
+      }
     }
     trackIris.forEach((iri, index) => {
       const listItem = this.factory.blankNode();
@@ -369,10 +389,13 @@ export class Playlist extends TermWrapper {
     return this.setTracks([...this.tracks(), trackIri]);
   }
 
-  /** Remove the entry at the given 0-based index. Out-of-range is a no-op. */
+  /**
+   * Remove the entry at the given 0-based index. A non-integer or out-of-range
+   * index is a no-op (never a coerced removal of the wrong entry).
+   */
   removeAt(index: number): this {
     const current = this.tracks();
-    if (index < 0 || index >= current.length) {
+    if (!Number.isInteger(index) || index < 0 || index >= current.length) {
       return this;
     }
     current.splice(index, 1);

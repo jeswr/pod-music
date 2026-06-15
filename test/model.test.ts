@@ -9,11 +9,13 @@ import {
   MO_PLAYLIST,
   MO_RECORD,
   MO_TRACK,
+  MO_TRACK_PROP,
   SCHEMA_LISTEN_ACTION,
   SCHEMA_MUSIC_ALBUM,
   SCHEMA_MUSIC_GROUP,
   SCHEMA_MUSIC_PLAYLIST,
   SCHEMA_MUSIC_RECORDING,
+  SCHEMA_TRACK,
 } from "../src/vocab/iris.js";
 
 const TRACK = "https://alice.example/music/tracks/t1";
@@ -219,13 +221,33 @@ describe("Playlist", () => {
     expect(playlist.tracks()).toEqual([TRACK, t3, t2]);
   });
 
-  it("removeAt is a no-op for an out-of-range index", () => {
+  it("removeAt is a no-op for an out-of-range or fractional index", () => {
     const playlist = new Playlist(PLAYLIST, emptyDataset(), factory).stampType();
     playlist.title = "L";
     playlist.setTracks([TRACK, t2]);
     playlist.removeAt(-1);
     playlist.removeAt(5);
+    playlist.removeAt(1.9); // must NOT coerce to index 1 and remove t2
     expect(playlist.tracks()).toEqual([TRACK, t2]);
+  });
+
+  it("setTracks strips flat schema:track / mo:track triples (ordered form is authoritative)", async () => {
+    const turtle = `
+      @prefix mo: <http://purl.org/ontology/mo/> .
+      @prefix schema: <http://schema.org/> .
+      <${PLAYLIST}> a mo:Playlist ; schema:name "Legacy" ;
+        schema:track <${TRACK}> ;
+        mo:track <${TRACK}> .
+    `;
+    const dataset = await parseTurtle(turtle, PLAYLIST);
+    const playlist = new Playlist(PLAYLIST, dataset, factory);
+    expect(playlist.tracks()).toEqual([]); // flat predicates are not read as ordered entries
+    playlist.setTracks([t2]);
+    expect(playlist.tracks()).toEqual([t2]);
+    // the flat predicates are gone — no mixed state remains
+    const subject = factory.namedNode(PLAYLIST);
+    expect([...dataset.match(subject, factory.namedNode(SCHEMA_TRACK))]).toHaveLength(0);
+    expect([...dataset.match(subject, factory.namedNode(MO_TRACK_PROP))]).toHaveLength(0);
   });
 
   it("setTracks replaces the entire list (and clears prior entries)", () => {
