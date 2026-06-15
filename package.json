@@ -1,0 +1,51 @@
+{
+  "name": "@jeswr/pod-music",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "description": "Pod Music — typed RDF data layer for tracks, albums, artists, playlists and listen-history (Music Ontology + schema.org) stored in a Solid pod. Experimental, AI-agent-generated.",
+  "license": "MIT",
+  "author": "Claude Opus 4.8 (@jeswr PSS agent)",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jeswr/pod-music.git"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "public"
+  ],
+  "scripts": {
+    "lint": "biome check src test",
+    "lint:fix": "biome check --write src test",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "coverage": "vitest run --coverage",
+    "build": "tsc -p tsconfig.build.json",
+    "gate": "npm run lint && npm run typecheck && npm run coverage && npm run build"
+  },
+  "dependencies": {
+    "@jeswr/fetch-rdf": "^0.1.0",
+    "@rdfjs/wrapper": "^0.34.0",
+    "@solid/object": "^0.6.0",
+    "n3": "^1.26.0"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.5.0",
+    "@rdfjs/types": "^2.0.1",
+    "@types/n3": "^1.26.0",
+    "@types/node": "^22.10.0",
+    "@vitest/coverage-v8": "^4.1.9",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.9"
+  }
+}

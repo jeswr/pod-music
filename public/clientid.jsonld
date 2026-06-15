@@ -1,0 +1,30 @@
+{
+  "@context": [
+    "https://www.w3.org/ns/solid/oidc-context.jsonld",
+    {
+      "fedapp": "https://w3id.org/jeswr/fed#",
+      "acl": "http://www.w3.org/ns/auth/acl#",
+      "mo": "http://purl.org/ontology/mo/",
+      "schema": "http://schema.org/",
+      "sectors": "https://w3id.org/jeswr/sectors/",
+      "App": "fedapp:App",
+      "sector": { "@id": "fedapp:sector", "@type": "@id" },
+      "access": { "@id": "fedapp:access", "@type": "@id", "@container": "@set" },
+      "consumes": { "@id": "fedapp:consumes", "@type": "@id", "@container": "@set" },
+      "produces": { "@id": "fedapp:produces", "@type": "@id", "@container": "@set" }
+    }
+  ],
+  "client_id": "https://pod-music.jeswr.org/clientid.jsonld",
+  "client_name": "Pod Music",
+  "client_uri": "https://pod-music.jeswr.org/",
+  "redirect_uris": ["https://pod-music.jeswr.org/", "https://pod-music.jeswr.org/callback"],
+  "grant_types": ["authorization_code", "refresh_token"],
+  "response_types": ["code"],
+  "scope": "openid profile offline_access webid",
+  "token_endpoint_auth_method": "none",
+  "@type": "App",
+  "sector": "https://w3id.org/jeswr/sectors/media#sector",
+  "access": ["acl:Read", "acl:Write", "acl:Append"],
+  "produces": ["mo:Track", "schema:MusicRecording", "schema:MusicAlbum", "schema:MusicPlaylist", "schema:ListenAction"],
+  "consumes": ["mo:Track", "schema:MusicRecording", "mo:MusicArtist", "schema:MusicGroup"]
+}

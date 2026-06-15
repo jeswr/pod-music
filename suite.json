@@ -1,0 +1,28 @@
+{
+  "$schema": "https://solid.example/suite-tracking/suite.schema.json",
+  "id": "pod-music",
+  "kind": "app",
+  "name": "Pod Music",
+  "repo": "https://github.com/jeswr/pod-music",
+  "category": "media",
+  "maturity": "prototype",
+  "visibility": "public",
+  "stack": {
+    "rdf": "n3 ^1.26.x",
+    "rdf-wrapper": "@rdfjs/wrapper ^0.34.x",
+    "solid-object": "@solid/object ^0.6.x",
+    "fetch-rdf": "@jeswr/fetch-rdf ^0.1.x",
+    "test": "vitest ^4.x",
+    "lint": "@biomejs/biome ^2.x",
+    "node": ">=22"
+  },
+  "dependsOn": ["solid-federation-vocab"],
+  "federation": {
+    "clientIdUrl": "https://pod-music.jeswr.org/clientid.jsonld",
+    "sectors": ["media"],
+    "accessModes": ["Read", "Write", "Append"],
+    "produces": ["media"],
+    "consumes": ["media"],
+    "membershipTodo": "Once fedapp: (https://w3id.org/jeswr/fed#) is frozen and the federation registry runs a signed challenge, register Pod Music as a media-sector App producing/consuming mo:Track / schema:MusicRecording / schema:ListenAction. Do not assert membership here."
+  }
+}

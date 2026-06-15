@@ -1,0 +1,11 @@
+# roborev config — Pod Music (jeswr suite).
+# Mirrors the suite-standard shape (codex reviewer, review_min_severity = low) so
+# code is never reviewed only by the model family that wrote it.
+
+agent = "codex"
+model = "gpt-5.5"
+
+review_min_severity = "low"
+
+reuse_review_session = true
+reuse_review_session_lookback = 5
