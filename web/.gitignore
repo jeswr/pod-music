@@ -1,0 +1,12 @@
+/node_modules
+/dist
+*.tsbuildinfo
+
+# Generated at build from APP_ORIGIN by scripts/gen-clientid.mjs — never committed
+# (per-origin artifacts; the source of truth is the script + APP_ORIGIN env).
+/public/clientid.jsonld
+/public/callback.html
+
+# Local env overrides
+.env
+.env.local
