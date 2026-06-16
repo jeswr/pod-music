@@ -41,6 +41,15 @@ export interface DerivedSession {
   webId: string;
   /** True when the pod root came from the WebID origin fallback, not pim:storage. */
   podRootIsFallback: boolean;
+  /**
+   * The profile's human display name (foaf:name), for the header AccountMenu.
+   * `undefined` when the profile advertises none (the menu then falls back to the
+   * WebID). NOT the WebID-as-name fallback `readProfile` applies — we keep the
+   * "real name only" signal here so the menu can decide its own fallback chain.
+   */
+  displayName?: string;
+  /** The profile avatar URL (foaf:img / vcard:hasPhoto), for the AccountMenu avatar. */
+  avatarUrl?: string;
 }
 
 /** The resolved music library container `base` + how it was discovered. */
@@ -59,14 +68,27 @@ function asContainer(url: string): string {
   return url.endsWith("/") ? url : `${url}/`;
 }
 
+/**
+ * The profile's REAL display name, or undefined. `readProfile` sets `name` to the
+ * WebID when the profile advertises no foaf:name; here we strip that fallback so
+ * the AccountMenu sees only a genuine name (and applies its own WebID fallback).
+ */
+function realDisplayName(profile: Profile): string | undefined {
+  return profile.name && profile.name !== profile.webId ? profile.name : undefined;
+}
+
 /** Derive the pod root + WebID from a read profile (the synchronous part). */
 export function deriveSession(profile: Profile): DerivedSession {
+  const displayName = realDisplayName(profile);
+  const { avatarUrl } = profile;
   const storage = profile.storages[0];
   if (storage) {
     return {
       podRoot: asContainer(storage),
       webId: profile.webId,
       podRootIsFallback: false,
+      displayName,
+      avatarUrl,
     };
   }
   // Fallback: the WebID's origin. new URL("/", webId) gives `scheme://host/`.
@@ -75,6 +97,8 @@ export function deriveSession(profile: Profile): DerivedSession {
     podRoot: asContainer(fallback),
     webId: profile.webId,
     podRootIsFallback: true,
+    displayName,
+    avatarUrl,
   };
 }
 

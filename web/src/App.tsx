@@ -13,6 +13,7 @@
 // `tracks/` container), falling back to the conventional `${podRoot}music/` and
 // surfacing a banner when no registration is found (see session-derivation.ts).
 
+import { AccountMenu, FeedbackButton, ThemeToggle } from "@jeswr/app-shell";
 import { MusicStore } from "@jeswr/pod-music";
 import { MusicLibrary } from "@jeswr/pod-music/ui";
 import { useEffect, useState } from "react";
@@ -75,14 +76,38 @@ export function App() {
 
   return (
     <div className="app-shell">
+      {/* The header uses the shared @jeswr/app-shell chrome: a header-level
+          <FeedbackButton/> (opens a themed dialog that files a GitHub issue against
+          THIS app's own repo), a light/dark/system <ThemeToggle/>, and a real
+          top-right <AccountMenu/> (avatar + display name, dropdown showing the WebID
+          + Sign out) — replacing the old raw-WebID span + bare logout button. The
+          session's WebID / profile name / avatar / logout wire straight into the
+          props (the components are fully decoupled — everything is a prop).
+          `app-header-actions` right-aligns the trio.
+
+          FEEDBACK: `repo` is the only app-specific value — pod-music files against
+          `jeswr/pod-music`. `appVersion` is the build SHA injected by Vite
+          (`__APP_VERSION__`), so a filed issue pins the deployed commit. `webId` is
+          attached to diagnostics ONLY if the reporter ticks the consent box. `submit`
+          is intentionally UNSET → the dialog uses the GitHub prefill page; the
+          feedback-proxy hook is wired suite-wide later. */}
       <header className="app-header">
         <span className="app-brand">Pod Music</span>
-        <span className="app-webid" title={webId}>
-          {webId}
-        </span>
-        <button type="button" className="app-logout" onClick={logout}>
-          Log out
-        </button>
+        <div className="app-header-actions">
+          <FeedbackButton
+            repo="jeswr/pod-music"
+            appName="Pod Music"
+            appVersion={__APP_VERSION__}
+            webId={webId}
+          />
+          <ThemeToggle />
+          <AccountMenu
+            webId={webId}
+            displayName={session.displayName}
+            avatarUrl={session.avatarUrl}
+            onSignOut={logout}
+          />
+        </div>
       </header>
       {session.podRootIsFallback ? (
         <p className="app-note" role="note">

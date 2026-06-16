@@ -1,7 +1,9 @@
 {
   "$schema": "https://biomejs.dev/schemas/2.5.0/schema.json",
   "vcs": { "enabled": true, "clientKind": "git", "useIgnoreFile": true },
-  "files": { "includes": ["src/**", "scripts/**"] },
+  "files": {
+    "includes": ["src/**", "scripts/**", "test/**", "vite.config.ts", "vitest.config.ts"]
+  },
   "formatter": { "enabled": true, "indentStyle": "space", "indentWidth": 2, "lineWidth": 100 },
   "linter": {
     "enabled": true,
@@ -10,5 +12,6 @@
       "suspicious": { "noConsole": "off" }
     }
   },
-  "javascript": { "formatter": { "quoteStyle": "double" } }
+  "javascript": { "formatter": { "quoteStyle": "double" } },
+  "css": { "parser": { "tailwindDirectives": true } }
 }

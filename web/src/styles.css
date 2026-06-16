@@ -1,17 +1,36 @@
 /* AUTHORED-BY Claude Opus 4.8 (Fable unavailable) — re-review/upgrade candidate
    Host chrome + the pod-music-* classes the @jeswr/pod-music <MusicLibrary> emits
-   (the component ships no styles of its own — the host owns the look). */
+   (the component ships no styles of its own — the host owns the look).
 
+   THEME: Tailwind v4 + the shared @jeswr/app-shell tokens drive light/dark. The
+   import order is load-bearing — `@import "tailwindcss"` FIRST, then the suite
+   OKLCH tokens + the `@theme inline` mapping (`@jeswr/app-shell/styles.css`) so
+   the shell components' utilities (bg-popover, text-muted-foreground, the `dark:`
+   variant, …) resolve to the suite palette. `@source` makes Tailwind scan the
+   app-shell package so the classes its <ThemeToggle/> + <AccountMenu/> emit are
+   actually generated (a node_modules package is otherwise outside the content
+   scan). The path is relative to THIS file. */
+@import "tailwindcss";
+@import "@jeswr/app-shell/styles.css";
+@source "../node_modules/@jeswr/app-shell/dist";
+
+/* The host chrome below predates the shared tokens and uses its own variable
+   names (--bg/--ink/…). Map them onto the app-shell OKLCH tokens so the WHOLE
+   pod-music UI (login card, header, library table) follows the theme — the
+   `.dark` class the ThemeProvider toggles on <html> flips the OKLCH vars, and
+   these aliases inherit it for free. */
 :root {
-  --bg: #f3f8f9;
-  --surface: #ffffff;
-  --ink: #1c2b30;
-  --muted: #5b6b70;
-  --accent: #0b7285;
-  --accent-ink: #ffffff;
-  --border: #d6e1e4;
-  --danger: #b02525;
-  --ok: #1a7a3f;
+  --bg: var(--background);
+  --surface: var(--card);
+  --ink: var(--foreground);
+  --muted: var(--muted-foreground);
+  --accent: var(--primary);
+  --accent-ink: var(--primary-foreground);
+  /* NOTE: the host's `--border` is the SAME name as the app-shell token, so it is
+     already unified — do NOT re-alias it to itself (that would self-reference to an
+     invalid value). The other host vars below use distinct names, so they alias. */
+  --danger: var(--destructive);
+  --ok: var(--success);
   font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
 }
 
@@ -111,23 +130,24 @@ button:disabled {
   font-weight: 700;
   font-size: 1.1rem;
 }
-.app-webid {
-  color: var(--muted);
-  font-size: 0.8rem;
+/* Right-aligned header controls: the app-shell <FeedbackButton/> + <ThemeToggle/>
+   + <AccountMenu/>. `margin-left: auto` pushes the trio to the top-right; the
+   app-shell components bring their own (Tailwind-utility) styling, so this only
+   handles placement. */
+.app-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
   margin-left: auto;
-  max-width: 22rem;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
-.app-logout {
-  background: transparent;
-  color: var(--accent);
-  border: 1px solid var(--border);
-}
+/* The fallback/error banners are theme-aware: a soft tint derived from the
+   suite `--warning` token (via color-mix over the card surface) with token-coloured
+   text + border. Because the tokens flip on `.dark`, the banner stays legible in
+   BOTH modes — no hard-coded light surfaces. */
 .app-note {
-  background: #fff8e6;
-  border: 1px solid #f0e0b0;
+  background: color-mix(in oklab, var(--warning) 16%, var(--card));
+  border: 1px solid color-mix(in oklab, var(--warning) 40%, var(--card));
+  color: var(--foreground);
   border-radius: 0.5rem;
   padding: 0.6rem 0.8rem;
   font-size: 0.85rem;

@@ -13,3 +13,11 @@ interface ImportMetaEnv {
 interface ImportMeta {
   readonly env: ImportMetaEnv;
 }
+
+/**
+ * The build version (short git SHA, else package version) injected by Vite's
+ * `define` at build time — see vite.config.ts. Used as the header
+ * FeedbackButton's `appVersion` so a filed issue pins the deployed commit. In
+ * the test environment vitest provides it via the same `define`.
+ */
+declare const __APP_VERSION__: string;
