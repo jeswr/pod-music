@@ -22,6 +22,7 @@
   "dependencies": {
     "@jeswr/app-shell": "github:jeswr/app-shell#main",
     "@jeswr/fetch-rdf": "^0.1.0",
+    "@jeswr/solid-session-restore": "git+https://github.com/jeswr/solid-session-restore.git#f501aec",
     "@radix-ui/react-avatar": "^1.2.0",
     "@radix-ui/react-dropdown-menu": "^2.1.18",
     "@rdfjs/wrapper": "^0.34.0",

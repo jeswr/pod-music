@@ -34,6 +34,12 @@
  */
 
 import { fetchRdf } from "@jeswr/fetch-rdf";
+import {
+  forgetPersisted,
+  hasPersisted,
+  restoreSession,
+  type SessionStore,
+} from "@jeswr/solid-session-restore";
 import type { GetCodeCallback } from "@solid/reactive-authentication";
 import * as DPoP from "dpop";
 import * as oauth from "oauth4webapi";
@@ -333,6 +339,18 @@ export interface WebIdDPoPTokenProviderOptions {
    * patches the global) — see the recursion note in the class docs. Test-only.
    */
   profileFetch?: typeof fetch;
+  /**
+   * The durable, WebID/issuer-scoped credential store backing SILENT SESSION
+   * RESTORE (cross-app UX invariant #1). When set, a successful login PERSISTS the
+   * DPoP-bound refresh token + the non-extractable DPoP key to it (keyed by
+   * issuer), and {@link WebIdDPoPTokenProvider.restoreIssuer} can later rebuild
+   * the session from it via a `refresh_token` grant on a fresh page load — no
+   * popup/iframe. Logout drops the entry ({@link forgetPersisted}). When ABSENT
+   * (e.g. a unit test that does not exercise restore), the provider behaves exactly
+   * as before: it persists nothing and `restoreIssuer` reports nothing to restore.
+   * Construction is in `@jeswr/solid-session-restore`'s `IndexedDbSessionStore`.
+   */
+  sessionStore?: SessionStore;
 }
 
 /** A WebID advertises several issuers but no `chooseIssuer` was supplied. */
@@ -387,6 +405,14 @@ interface IssuerSession {
    * two agree before flipping to logged-in (see {@link WebIdDPoPTokenProvider.authenticatedWebId}).
    */
   authenticatedWebId: string | undefined;
+  /**
+   * The DPoP-bound refresh token the OP issued (present iff `offline_access` was
+   * granted), so a later page load can silently RESTORE via a `refresh_token`
+   * grant ({@link WebIdDPoPTokenProvider.restoreIssuer}). Undefined when the server
+   * issued none. Persisted (with {@link dpopKey}) to the session store on a
+   * confirmed login — never logged.
+   */
+  refreshToken?: string;
 }
 
 const isLoopback = (host: string): boolean =>
@@ -399,6 +425,28 @@ export class WebIdDPoPTokenProvider implements TokenProvider {
   readonly #clientId?: string;
   readonly #chooseIssuer?: ChooseIssuerCallback;
   readonly #allowInsecureLoopback: boolean;
+  /**
+   * The durable, WebID/issuer-scoped credential store for SILENT SESSION RESTORE
+   * (cross-app UX invariant #1), or undefined when restore is not wired (tests).
+   * A confirmed login persists the DPoP-bound refresh token + non-extractable key
+   * here keyed by issuer; {@link restoreIssuer} rebuilds the session from it on a
+   * fresh page load; logout / re-login drops the entry. NEVER logged.
+   */
+  readonly #sessionStore?: SessionStore;
+  /**
+   * SERIALISES durable session-store MUTATIONS ({@link persistSession} /
+   * {@link forgetIssuer}) so they execute strictly in call order. Without this, a
+   * logout's un-awaited `delete` could land AFTER a fast re-login's `put` and wipe
+   * the freshly persisted credential (roborev MEDIUM): logout fires forget; the user
+   * logs back in to the SAME issuer; the new login persists; then the stale delete
+   * arrives and removes it → the next reload cannot restore. Chaining every mutation
+   * onto this tail (regardless of success/failure of the prior op) guarantees a `put`
+   * issued after a `forget` runs after that `forget` has completed. Reads
+   * ({@link restoreSession}'s own get/put + {@link hasPersistedFor}) are not chained
+   * here — the package's restore re-persists the rotated token atomically and
+   * hasPersistedFor is a read.
+   */
+  #storeOps: Promise<void> = Promise.resolve();
   /**
    * The profile is PUBLIC, so reading it needs no auth. We must not read it
    * through the patched global fetch in a way that recurses back into this
@@ -495,6 +543,7 @@ export class WebIdDPoPTokenProvider implements TokenProvider {
     this.#chooseIssuer = options.chooseIssuer;
     this.#allowInsecureLoopback = options.allowInsecureLoopback ?? false;
     this.#profileFetch = options.profileFetch ?? globalThis.fetch.bind(globalThis);
+    this.#sessionStore = options.sessionStore;
   }
 
   /** oauth4webapi request options, enabling insecure loopback per the policy. */
@@ -610,6 +659,259 @@ export class WebIdDPoPTokenProvider implements TokenProvider {
    */
   wasLoginProbeUpgraded(generation: number): boolean {
     return this.#probeUpgradedGeneration === generation;
+  }
+
+  // ── Silent session restore (cross-app UX invariant #1) ──────────────────────
+  //
+  // The DURABLE half lives in @jeswr/solid-session-restore (the audited, shared
+  // CORE: the IndexedDB credential store, the pure restore decision, and the
+  // DPoP-bound `refresh_token` grant). The provider keeps only the THIN per-app
+  // wiring the README prescribes: persist the refresh credential on a confirmed
+  // login, rebuild the session from it on a fresh load (pinning it in this
+  // provider's in-memory state under the generation fence so a later 401 upgrade
+  // reuses it with no re-prompt), and drop it on logout. All three are no-ops when
+  // no `sessionStore` was supplied (tests / a build that opts out of restore).
+
+  /**
+   * PERSIST the current confirmed session's DPoP-bound refresh credential to the
+   * store, so a later page load can SILENTLY RESTORE it. Called by the login flow
+   * AFTER the authenticated WebID has been proven to equal the requested one
+   * ({@link authenticatedWebId} === requested) — never before, so a half-finished
+   * or wrong-identity login never writes a credential. Keyed by `issuer.href`.
+   *
+   * RETURNS `true` iff a credential was DURABLY written, else `false` — so the caller
+   * writes the remembered-account pointer ONLY on a real persist, never leaving a
+   * pointer to a non-restorable session (roborev LOW). Returns `false` (a no-op) when:
+   * no store is wired; the session has no refresh token (the OP issued none); the
+   * DPoP key is extractable / unverifiable; or the store write fails (best-effort — a
+   * persistence failure must not fail an otherwise-good login). The refresh token is
+   * never logged.
+   */
+  async persistSession(issuer: URL, webId: string): Promise<boolean> {
+    const store = this.#sessionStore;
+    if (!store) return false;
+    const pending = this.#sessions.get(issuer.href);
+    if (!pending) return false;
+    let session: IssuerSession;
+    try {
+      session = await pending;
+    } catch {
+      return false; // the session failed to establish — nothing to persist.
+    }
+    // Only persist when there is actually a refresh credential AND the persisted
+    // record's WebID is the one we confirmed (defence-in-depth — the caller already
+    // proved this, but a credential store write must never record a mismatched id).
+    if (!session.refreshToken || !webIdsEqual(session.authenticatedWebId, webId)) return false;
+    const refreshToken = session.refreshToken;
+    const dpopKey = session.dpopKey;
+    // SECURITY — NEVER persist an EXTRACTABLE DPoP private key (roborev HIGH). The
+    // persisted-credential threat model REQUIRES a non-extractable key: a stolen
+    // refresh token is useless off-origin only because the matching DPoP key cannot
+    // be exported (RFC 9449 sender-constraint). The popup login mints a
+    // non-extractable key (so it persists + is restorable); the autologin REDIRECT
+    // path mints an EXTRACTABLE key (it must export it to JWK to survive the full-page
+    // redirect), so persisting THAT session would let same-origin script export both
+    // the key and the refresh token and redeem it off-origin — defeating the whole
+    // point. FAIL CLOSED: persist ONLY when we can POSITIVELY confirm the private key
+    // is non-extractable (`extractable === false`). An extractable key (the redirect
+    // flow) — or any key whose shape we cannot verify — is NOT persisted, so that
+    // session is simply not silently restorable rather than stored behind an
+    // exportable key.
+    if (dpopKey?.privateKey?.extractable !== false) return false;
+    // SERIALISE behind any pending forget (roborev MEDIUM): chaining this put onto
+    // #storeOps guarantees that if a prior logout's delete is still in flight, it
+    // completes BEFORE this put, so a re-login's credential is not wiped by the
+    // late-arriving delete. Best-effort: a write error must not fail the login NOR
+    // break the chain for later ops (the catch keeps the tail resolved). `wrote`
+    // captures whether the put actually committed, so the caller only writes the
+    // remembered pointer on a real persist (roborev LOW).
+    let wrote = false;
+    await this.#enqueueStoreOp(async () => {
+      await store.put({
+        issuer: issuer.href,
+        webId,
+        refreshToken,
+        dpopKey,
+        // Persist the static Client Identifier Document URL when this app uses one,
+        // so the restore's refresh grant runs as the SAME client (a refresh token is
+        // client-bound, RFC 6749 §6). Omitted (not `: undefined`) for the dynamic
+        // path so the record satisfies `exactOptionalPropertyTypes`.
+        ...(this.#clientId !== undefined ? { clientId: this.#clientId } : {}),
+      });
+      wrote = true; // only reached if store.put resolved (the enqueue catch swallows errors).
+    });
+    return wrote;
+  }
+
+  /**
+   * Run a durable session-store MUTATION serialised behind every prior one (the
+   * {@link #storeOps} tail), so a logout's `delete` and a subsequent login's `put`
+   * never reorder (roborev MEDIUM). The op's own failure is swallowed (best-effort —
+   * a durable-store error must not fail login/logout) AND never breaks the chain:
+   * the tail is advanced to a resolved promise so a later op still runs after this
+   * one. Awaits the op so the caller (e.g. persistSession) sees it complete.
+   */
+  async #enqueueStoreOp(op: () => Promise<void>): Promise<void> {
+    const run = this.#storeOps.then(op, op).catch(() => {});
+    // Advance the tail to THIS op (already catch-guarded) so the next enqueue chains
+    // strictly after it, regardless of outcome.
+    this.#storeOps = run;
+    await run;
+  }
+
+  /**
+   * RESTORE a returning user's session for a KNOWN issuer from the durable store
+   * via the shared {@link restoreSession} helper (a DPoP-bound `refresh_token`
+   * grant — a token-endpoint FETCH, never a popup/iframe), and PIN the result into
+   * this provider's in-memory state UNDER the generation/reset fence, so a later
+   * 401 upgrade reuses the restored session with no re-prompt. Returns the restored
+   * WebID, or undefined when there is nothing to restore (no store / no entry /
+   * dead-or-transient grant failure — the helper clears a definitively-dead entry
+   * and preserves a transient one). The THIN wrapper the README's "per-app wiring"
+   * prescribes.
+   *
+   * FENCE: a `reset()` (logout / a new login) DURING the grant advances the
+   * generation; if so this restore is superseded and pins NOTHING (returns
+   * undefined) — a stale restore can never seed the next identity's clean state.
+   */
+  async restoreIssuer(issuer: URL): Promise<{ webId: string } | undefined> {
+    const store = this.#sessionStore;
+    if (!store) return undefined;
+    // Capture the fence up front (mirrors upgrade()/beginRedirectLogin); the grant
+    // runs on the provider's auth controller so a reset() actively aborts it.
+    const generation = this.#generation;
+    const restored = await restoreSession({
+      store,
+      issuer,
+      ...(this.#clientId !== undefined ? { clientId: this.#clientId } : {}),
+      allowInsecureLoopback: this.#allowInsecureLoopback,
+      signal: this.#authController.signal,
+    });
+    if (!restored) return undefined;
+    // FENCE: a reset() during the grant supersedes this restore — pin nothing so a
+    // logout/new-login that raced the grant keeps its clean baseline. The package's
+    // restoreSession may already have re-persisted the ROTATED refresh token before
+    // this fence trips; a logout that raced it would have enqueued a delete that could
+    // run BEFORE that put, leaving the credential resurrected. So when superseded,
+    // forget the just-restored credential (serialised on #storeOps, after the racing
+    // delete) — the next load then correctly finds nothing to restore.
+    if (generation !== this.#generation) {
+      await this.forgetIssuer(issuer);
+      return undefined;
+    }
+    // Pin the restored session, exactly as the popup/redirect login paths seed
+    // #sessions + #issuer + #authenticatedWebId, so a subsequent private read
+    // upgrades against the restored token without prompting.
+    const session: IssuerSession = {
+      // restoreSession discovered the AS + resolved the client; the popup-shaped
+      // fields it does not return are not needed for upgrade() (which only reads
+      // dpopKey + accessToken). Provide minimal placeholders for the structural
+      // session shape; they are never used after a restore (no re-auth occurs).
+      authorizationServer: { issuer: issuer.href },
+      clientRegistration: { client_id: this.#clientId ?? "" },
+      dpopKey: restored.dpopKey,
+      accessToken: restored.accessToken,
+      refreshToken: restored.refreshToken,
+      authenticatedWebId: restored.webId,
+    };
+    this.#sessions.set(issuer.href, Promise.resolve(session));
+    this.#issuer = Promise.resolve(issuer); // pin, like the popup/redirect login.
+    this.#authenticatedWebId = restored.webId;
+    return { webId: restored.webId };
+  }
+
+  /**
+   * Drop the durable credential for an issuer (logout / a fail-closed teardown).
+   * No-op when no store is wired. Delegates to the shared {@link forgetPersisted}
+   * (idempotent, swallows store errors). Does NOT touch in-memory provider state —
+   * the caller pairs this with {@link reset} (the README's teardown order: reset
+   * the in-memory session FIRST, then forget the durable credential).
+   */
+  async forgetIssuer(issuer: URL): Promise<void> {
+    const store = this.#sessionStore;
+    if (!store) return;
+    // Serialise behind any pending put (roborev MEDIUM) so this delete cannot land
+    // AFTER a later re-login's persistSession and wipe the new credential — the
+    // #storeOps chain forces strict call-order between forget and persist.
+    await this.#enqueueStoreOp(() => forgetPersisted(store, issuer));
+  }
+
+  /**
+   * LOGOUT-side: forget the durable credential for EVERY nameable issuer — the
+   * provider's currently-resolved issuer ({@link #issuer}) PLUS any extra issuers the
+   * caller knows (e.g. the remembered-account pointer's), de-duped and invalid-URL
+   * guarded. No-op when no store is wired.
+   *
+   * CRUCIALLY this enqueues the forget onto {@link #storeOps} SYNCHRONOUSLY (before
+   * it returns), so a fast re-login's {@link persistSession} — which also enqueues on
+   * #storeOps — is strictly ORDERED AFTER this delete and cannot be wiped by it
+   * (roborev MEDIUM ×2: the earlier `resolvedIssuer().then(forget)` deferred the
+   * enqueue to a later microtask, reintroducing the delete-after-put race; resolving
+   * #issuer INSIDE the already-enqueued op closes that). The op awaits #issuer
+   * internally, so capturing it need not be synchronous — only the ENQUEUE must be.
+   * Returns when all forgets have committed.
+   */
+  async logoutForget(extraIssuers: (string | undefined)[] = []): Promise<void> {
+    const store = this.#sessionStore;
+    if (!store) return;
+    // Capture the active-issuer PROMISE synchronously (before a later reset() clears
+    // #issuer); the op below awaits it. `#issuer` is captured here, in the synchronous
+    // prologue, so even if reset() reassigns it immediately after this call returns,
+    // we hold the pre-reset promise.
+    const activeIssuer = this.#issuer;
+    await this.#enqueueStoreOp(async () => {
+      const seen = new Set<string>();
+      const forget = async (raw: string | undefined) => {
+        if (!raw) return;
+        let url: URL;
+        try {
+          url = new URL(raw);
+        } catch {
+          return; // an unparseable issuer cannot key a store entry — skip it.
+        }
+        if (seen.has(url.href)) return;
+        seen.add(url.href);
+        await forgetPersisted(store, url);
+      };
+      // The provider's resolved issuer (awaited inside the op, after the enqueue).
+      let active: string | undefined;
+      try {
+        active = (await activeIssuer)?.href;
+      } catch {
+        active = undefined; // a rejected issuer resolution — nothing to forget there.
+      }
+      await forget(active);
+      for (const extra of extraIssuers) await forget(extra);
+    });
+  }
+
+  /**
+   * The issuer the current session was authenticated against (the memoised
+   * {@link #resolveIssuer} result), or undefined when none is resolved / it
+   * rejected. The login flow reads this AFTER a confirmed login to know which
+   * issuer key to {@link persistSession} the credential under, and the remembered
+   * pointer records it so silent restore knows which issuer's grant to run on
+   * reload. Resolving the held promise (rather than re-prompting) so it never
+   * re-opens the WebID dialog.
+   */
+  async resolvedIssuer(): Promise<URL | undefined> {
+    if (this.#issuer === undefined) return undefined;
+    try {
+      return await this.#issuer;
+    } catch {
+      return undefined;
+    }
+  }
+
+  /**
+   * Whether a durable credential is STILL persisted for an issuer (tri-state:
+   * `present` / `absent` / `unknown`), for the remembered-pointer keep/drop
+   * decision after a `login` outcome. `absent` when no store is wired (there is
+   * nothing to keep a pointer for). Delegates to the shared {@link hasPersisted}.
+   */
+  async hasPersistedFor(issuer: URL): Promise<"present" | "absent" | "unknown"> {
+    if (!this.#sessionStore) return "absent";
+    return hasPersisted(this.#sessionStore, issuer);
   }
 
   /**
@@ -836,12 +1138,22 @@ export class WebIdDPoPTokenProvider implements TokenProvider {
     const nonce = oauth.generateRandomNonce();
     const state = oauth.generateRandomState();
 
-    const buildAuthorizationUrl = (withPrompt: boolean): URL => {
+    // `offline_access` so the OP issues a DPoP-bound REFRESH token — the credential
+    // SILENT SESSION RESTORE (cross-app UX invariant #1) redeems on a later page load
+    // via a `refresh_token` grant. The DPoP key minted above stays NON-extractable, so
+    // the token is sender-constrained to a key whose raw bytes never leave the browser
+    // (RFC 9449 §4.3). We REQUEST offline_access first, but FALL BACK to the original
+    // `openid webid` if the AS rejects the scope (roborev MEDIUM): a provider that does
+    // not support/authorise offline_access must not break the popup login that worked
+    // before — the user just is not silently restorable there (no refresh token issued).
+    const SCOPE_WITH_OFFLINE = "openid webid offline_access";
+    const SCOPE_BASE = "openid webid";
+    const buildAuthorizationUrl = (withPrompt: boolean, scope: string): URL => {
       const url = new URL(authorizationServer.authorization_endpoint as string);
       url.searchParams.set("client_id", clientRegistration.client_id);
       url.searchParams.set("redirect_uri", registeredRedirectUri);
       url.searchParams.set("response_type", registeredResponseType);
-      url.searchParams.set("scope", "openid webid");
+      url.searchParams.set("scope", scope);
       if (withPrompt) url.searchParams.set("prompt", "none");
       url.searchParams.set("state", state);
       url.searchParams.set("nonce", nonce);
@@ -865,36 +1177,53 @@ export class WebIdDPoPTokenProvider implements TokenProvider {
       ? await oauth.calculatePKCECodeChallenge(codeVerifier)
       : codeVerifier;
 
-    const authorizationUrl = buildAuthorizationUrl(true);
-    if (usePkce) authorizationUrl.searchParams.set("code_challenge", codeChallenge);
-
-    let authorizationCodeParams: URLSearchParams;
-    const authorizationCodeResponse = await this.#getCode(authorizationUrl, signal);
-    try {
-      authorizationCodeParams = oauth.validateAuthResponse(
-        authorizationServer,
-        clientRegistration,
-        new URL(authorizationCodeResponse),
-        state,
-      );
-    } catch (e) {
-      if (
-        (e instanceof oauth.AuthorizationResponseError &&
-          (e.error === "interaction_required" ||
-            e.error === "consent_required" ||
-            e.error === "login_required")) ||
-        isEssMissingIssInteractionNeeded(e)
-      ) {
-        // The IdP needs the user to interact: retry once without `prompt=none`.
-        const retryUrl = buildAuthorizationUrl(false);
-        if (usePkce) retryUrl.searchParams.set("code_challenge", codeChallenge);
-        const retryResponse = await this.#getCode(retryUrl, signal);
-        authorizationCodeParams = oauth.validateAuthResponse(
+    // Run one authorization attempt for a given scope: build the URL, get the code via
+    // the popup, validate the response — with the existing `prompt=none` → interactive
+    // retry preserved. Returns the validated code params.
+    const attempt = async (scope: string): Promise<URLSearchParams> => {
+      const authorizationUrl = buildAuthorizationUrl(true, scope);
+      if (usePkce) authorizationUrl.searchParams.set("code_challenge", codeChallenge);
+      const authorizationCodeResponse = await this.#getCode(authorizationUrl, signal);
+      try {
+        return oauth.validateAuthResponse(
           authorizationServer,
           clientRegistration,
-          new URL(retryResponse),
+          new URL(authorizationCodeResponse),
           state,
         );
+      } catch (e) {
+        if (
+          (e instanceof oauth.AuthorizationResponseError &&
+            (e.error === "interaction_required" ||
+              e.error === "consent_required" ||
+              e.error === "login_required")) ||
+          isEssMissingIssInteractionNeeded(e)
+        ) {
+          // The IdP needs the user to interact: retry once without `prompt=none`.
+          const retryUrl = buildAuthorizationUrl(false, scope);
+          if (usePkce) retryUrl.searchParams.set("code_challenge", codeChallenge);
+          const retryResponse = await this.#getCode(retryUrl, signal);
+          return oauth.validateAuthResponse(
+            authorizationServer,
+            clientRegistration,
+            new URL(retryResponse),
+            state,
+          );
+        }
+        throw e;
+      }
+    };
+
+    let authorizationCodeParams: URLSearchParams;
+    try {
+      // First, request offline_access so silent restore gets a refresh token.
+      authorizationCodeParams = await attempt(SCOPE_WITH_OFFLINE);
+    } catch (e) {
+      // FALL BACK to the original `openid webid` scope when the AS rejects
+      // offline_access (roborev MEDIUM) — a provider that doesn't support/authorise it
+      // must not break a login that worked before. Any OTHER error rethrows.
+      if (isInvalidScopeError(e)) {
+        authorizationCodeParams = await attempt(SCOPE_BASE);
       } else {
         throw e;
       }
@@ -921,6 +1250,10 @@ export class WebIdDPoPTokenProvider implements TokenProvider {
       clientRegistration,
       dpopKey,
       accessToken: tokenResult.access_token,
+      // The DPoP-bound refresh token (present iff `offline_access` was granted) —
+      // the credential silent restore later redeems. Undefined when the server
+      // issued none (restore then has nothing to attempt). Never logged.
+      refreshToken: tokenResult.refresh_token,
       // The identity the OP actually vouched for. The login flow checks this
       // against the requested WebID before treating the user as logged in.
       authenticatedWebId: webIdFromClaims(oauth.getValidatedIdTokenClaims(tokenResult)),
@@ -1177,6 +1510,10 @@ export class WebIdDPoPTokenProvider implements TokenProvider {
         clientRegistration,
         dpopKey,
         accessToken: tokenResult.access_token,
+        // The autologin redirect requested `offline_access`, so the OP issues a
+        // refresh token here too — capture it so a confirmed autologin is ALSO
+        // silently restorable on reopen (persistSession reads it). Undefined if none.
+        refreshToken: tokenResult.refresh_token,
         authenticatedWebId,
       };
       // Establish the session so the patched global fetch upgrades subsequent reads,
@@ -1301,6 +1638,46 @@ function isEssMissingIssInteractionNeeded(e: unknown): boolean {
   } catch {
     return false;
   }
+}
+
+/**
+ * Whether an authorization error means the requested SCOPE was rejected — the AS
+ * does not support / did not authorise `offline_access`. oauth4webapi surfaces the
+ * authorization-endpoint OAuth error as `AuthorizationResponseError` with an `error`
+ * (+ optional `error_description`) field. Servers signal a bad scope inconsistently:
+ *  - the canonical `invalid_scope` (RFC 6749 §4.1.2.1) — always a scope rejection; OR
+ *  - `invalid_request` with a DESCRIPTION mentioning the scope / offline_access (some
+ *    AS implementations reject an unsupported scope as a malformed request).
+ * We read both the top-level `error`/`error_description` and a nested
+ * `.cause.parameters` shape structurally. When true, the popup login falls back to the
+ * base `openid webid` scope so a provider without offline_access support is not broken
+ * (the user is simply not silently restorable). We deliberately do NOT treat a bare
+ * `invalid_request` with NO scope-related description as a scope error — that would
+ * mask unrelated request errors behind a pointless scope-less retry.
+ *
+ * Exported so the classifier is unit-testable in isolation.
+ */
+export function isInvalidScopeError(e: unknown): boolean {
+  // A description that points at the scope / offline_access being the problem.
+  const descMentionsScope = (desc: unknown): boolean =>
+    typeof desc === "string" && /scope|offline_access/i.test(desc);
+  const isScopeRejection = (code: unknown, desc: unknown): boolean =>
+    code === "invalid_scope" || (code === "invalid_request" && descMentionsScope(desc));
+  if (e && typeof e === "object") {
+    const err = e as {
+      error?: unknown;
+      error_description?: unknown;
+      cause?: { parameters?: URLSearchParams };
+    };
+    if (isScopeRejection(err.error, err.error_description)) return true;
+    try {
+      const params = err.cause?.parameters;
+      if (isScopeRejection(params?.get("error"), params?.get("error_description"))) return true;
+    } catch {
+      // .cause.parameters not a URLSearchParams — not the shape we handle.
+    }
+  }
+  return false;
 }
 
 /**

@@ -152,6 +152,7 @@ const {
   REDIRECT_FLOW_KEY,
   hasPendingRedirectLogin,
   consumePendingRedirectWebId,
+  isInvalidScopeError,
 } = await import("./webid-token-provider");
 
 const WEBID_A = "https://alice.example/profile/card#me";
@@ -253,6 +254,50 @@ describe("webIdsEqual", () => {
 
   it("never equates two DIFFERENT users' WebIDs", () => {
     expect(webIdsEqual(WEBID_A, WEBID_B)).toBe(false);
+  });
+});
+
+describe("isInvalidScopeError — the offline_access scope-rejection classifier (roborev MEDIUM)", () => {
+  it("recognises a canonical invalid_scope (top-level + nested)", () => {
+    expect(isInvalidScopeError({ error: "invalid_scope" })).toBe(true);
+    expect(
+      isInvalidScopeError({
+        cause: { parameters: new URLSearchParams({ error: "invalid_scope" }) },
+      }),
+    ).toBe(true);
+  });
+
+  it("recognises invalid_request WHEN the description mentions scope / offline_access", () => {
+    expect(
+      isInvalidScopeError({
+        error: "invalid_request",
+        error_description: "The requested scope offline_access is not allowed",
+      }),
+    ).toBe(true);
+    expect(
+      isInvalidScopeError({
+        cause: {
+          parameters: new URLSearchParams({
+            error: "invalid_request",
+            error_description: "unknown scope value",
+          }),
+        },
+      }),
+    ).toBe(true);
+  });
+
+  it("does NOT treat a bare invalid_request (no scope description) as a scope error", () => {
+    expect(isInvalidScopeError({ error: "invalid_request" })).toBe(false);
+    expect(
+      isInvalidScopeError({ error: "invalid_request", error_description: "missing redirect_uri" }),
+    ).toBe(false);
+  });
+
+  it("ignores unrelated / malformed errors (fail-safe)", () => {
+    expect(isInvalidScopeError({ error: "access_denied" })).toBe(false);
+    expect(isInvalidScopeError(new Error("boom"))).toBe(false);
+    expect(isInvalidScopeError(null)).toBe(false);
+    expect(isInvalidScopeError(undefined)).toBe(false);
   });
 });
 

@@ -22,7 +22,7 @@ import { discoverMusicBase, type MusicBase } from "./auth/session-derivation";
 import { LoginScreen } from "./LoginScreen";
 
 export function App() {
-  const { webId, session, logout, autologinPending } = useSession();
+  const { webId, session, logout, autologinPending, restoring } = useSession();
   // The resolved music base + how it was discovered; null while resolving.
   const [musicBase, setMusicBase] = useState<MusicBase | null>(null);
 
@@ -66,6 +66,22 @@ export function App() {
             <h1>Pod Music</h1>
             <p className="login-sub" role="status">
               Signing you in…
+            </p>
+          </section>
+        </main>
+      );
+    }
+    // SILENT SESSION RESTORE in flight (cross-app UX invariant #1): a returning user's
+    // persisted DPoP-bound refresh token is being redeemed (no popup). Show a brief
+    // "Restoring…" state rather than flashing the login form; we fall through to
+    // <LoginScreen/> only once the restore resolves (and finds nothing to restore).
+    if (restoring) {
+      return (
+        <main className="login-screen" aria-busy="true">
+          <section className="login-card">
+            <h1>Pod Music</h1>
+            <p className="login-sub" role="status">
+              Restoring your session…
             </p>
           </section>
         </main>
