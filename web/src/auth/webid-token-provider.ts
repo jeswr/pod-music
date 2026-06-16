@@ -1021,6 +1021,15 @@ export class WebIdDPoPTokenProvider implements TokenProvider {
     authorizationUrl.searchParams.set("response_type", "code");
     // offline_access so the redirect path can mint a refresh token (silent SSO).
     authorizationUrl.searchParams.set("scope", "openid webid offline_access");
+    // prompt=none makes autologin SILENT-with-fallback: a live OP session returns
+    // the code without showing an interactive page; an ABSENT session makes the OP
+    // return ?error=login_required (or interaction_required/consent_required) which
+    // SessionProvider's OIDC-error abort path catches to clean up + fall back to the
+    // normal interactive login. Without it the redirect would render an interactive
+    // IdP page on autologin (no SSO session), and that abort path would be
+    // unreachable. The popup path keeps its own two-attempt prompt=none→retry logic
+    // (buildAuthorizationUrl) and is intentionally NOT touched here.
+    authorizationUrl.searchParams.set("prompt", "none");
     authorizationUrl.searchParams.set("state", state);
     authorizationUrl.searchParams.set("nonce", nonce);
     if (usePkce) {

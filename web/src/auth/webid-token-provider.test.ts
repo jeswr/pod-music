@@ -921,6 +921,19 @@ describe("AUTOLOGIN — two-phase full-page redirect login (beginRedirectLogin /
     expect(flow.dpopPublicJwk.d).toBeUndefined(); // public JWK has no private scalar.
   });
 
+  it("FIX-2 — the authorization URL sets prompt=none and uses the APP-ROOT redirect_uri", async () => {
+    const provider = makeProvider();
+    const { authorizationUrl } = await provider.beginRedirectLogin(RETURN_URI);
+    const url = new URL(authorizationUrl);
+    // prompt=none makes autologin silent-with-fallback: only WITH it does the OP
+    // emit ?error=login_required, which SessionProvider's abort path relies on.
+    expect(url.searchParams.get("prompt")).toBe("none");
+    // The redirect_uri is the app root (`${origin}/`) — the page that re-runs
+    // SessionProvider and can read `?code&state`, NOT the popup's callback.html.
+    expect(url.searchParams.get("redirect_uri")).toBe(RETURN_URI);
+    expect(RETURN_URI).toBe("https://app.example/"); // the app root, not callback.html
+  });
+
   it("generates an EXTRACTABLE DPoP key for the redirect path (so it can be exported)", async () => {
     const provider = makeProvider();
     await provider.beginRedirectLogin(RETURN_URI);

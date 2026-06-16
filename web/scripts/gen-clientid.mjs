@@ -132,16 +132,24 @@ function readEnvFile(name) {
 /**
  * The Solid-OIDC Client Identifier Document. A PUBLIC browser client (no secret;
  * `token_endpoint_auth_method: "none"`). `client_id` MUST equal the URL this is
- * served from byte-for-byte, and `redirect_uris` MUST list the callback the
- * token provider passes (origin + /callback.html).
+ * served from byte-for-byte, and `redirect_uris` MUST list EVERY redirect target
+ * the token provider uses:
+ *  - `${origin}/callback.html` — the POPUP path (interactive login); the popup page
+ *    only posts the code back to the opener and does NOT run the app;
+ *  - `${origin}/` (the app root) — the FULL-PAGE REDIRECT (autologin) path; the
+ *    broker redirects back here with `?code&state`, and because the app root re-runs
+ *    SessionProvider it can detect + complete the redirect login. callback.html
+ *    cannot serve the redirect path (it never runs the app). The provider's
+ *    `beginRedirectLogin` uses `${origin}/` as both the authorization redirect_uri
+ *    AND the token-exchange redirect_uri — they must match this registered value.
  */
-function clientIdDocument(origin) {
+export function clientIdDocument(origin) {
   return {
     "@context": ["https://www.w3.org/ns/solid/oidc-context.jsonld"],
     client_id: `${origin}/clientid.jsonld`,
     client_name: "Pod Music",
     client_uri: `${origin}/`,
-    redirect_uris: [`${origin}/callback.html`],
+    redirect_uris: [`${origin}/callback.html`, `${origin}/`],
     scope: "openid webid offline_access",
     grant_types: ["authorization_code", "refresh_token"],
     response_types: ["code"],

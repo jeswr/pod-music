@@ -18,7 +18,12 @@
 // `.mjs` script and `tsconfig` has `allowJs:false`, so co-locating a `.mjs` test
 // keeps it OUT of `tsc` while vitest still runs it.
 import { describe, expect, it } from "vitest";
-import { DEV_DEFAULT, normaliseOrigin, resolveOriginValue } from "./gen-clientid.mjs";
+import {
+  clientIdDocument,
+  DEV_DEFAULT,
+  normaliseOrigin,
+  resolveOriginValue,
+} from "./gen-clientid.mjs";
 
 const A = "https://a.example";
 const B = "https://b.example";
@@ -85,6 +90,23 @@ describe("resolveOriginValue — origin precedence", () => {
 
   it("falls back to the dev default when nothing is set", () => {
     expect(resolveOriginValue({})).toBe(DEV_DEFAULT);
+  });
+});
+
+describe("clientIdDocument — redirect_uris", () => {
+  const ORIGIN = "https://music.example";
+
+  // FIX-1 (HIGH): autologin's full-page redirect uses the APP ROOT (`${origin}/`)
+  // as redirect_uri, so the client document MUST register it alongside the popup's
+  // callback.html — a compliant OP rejects an unregistered redirect_uri.
+  it("registers BOTH the popup callback.html AND the app-root redirect_uri", () => {
+    const doc = clientIdDocument(ORIGIN);
+    expect(doc.redirect_uris).toContain(`${ORIGIN}/callback.html`);
+    expect(doc.redirect_uris).toContain(`${ORIGIN}/`);
+  });
+
+  it("client_id is the byte-exact clientid.jsonld URL on this origin", () => {
+    expect(clientIdDocument(ORIGIN).client_id).toBe(`${ORIGIN}/clientid.jsonld`);
   });
 });
 
