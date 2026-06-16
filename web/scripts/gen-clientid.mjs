@@ -15,19 +15,86 @@
 // ORIGIN SOURCE (first non-empty wins): APP_ORIGIN, then VITE_APP_ORIGIN, else
 // the dev default http://localhost:5173. Set
 // APP_ORIGIN=https://music.solid-test.jeswr.org for a production build.
+//
+// ENV FILES. This Node script runs BEFORE Vite, so Vite's own `.env` loading has
+// NOT happened yet — without the explicit load below, a `.env` / `.env.local`
+// holding `APP_ORIGIN` would be IGNORED and the build would silently fall back to
+// the localhost default, emitting a production-broken clientid (wrong origin).
+// We load `.env` then `.env.local` from web/ here, mirroring Vite's precedence:
+// the SHELL environment WINS over both files, and `.env.local` overrides `.env`.
+// A missing file is fine (not every checkout has one).
+//
+// PRECEDENCE IS RESOLVED PER-VALUE, NOT PER-VARIABLE. The origin can come from
+// either `APP_ORIGIN` (preferred) or `VITE_APP_ORIGIN`, so "shell wins" must hold
+// ACROSS the pair: a shell-provided `VITE_APP_ORIGIN` must beat a file-provided
+// `APP_ORIGIN` even though `APP_ORIGIN` ranks first. We therefore resolve the
+// SHELL origin (snapshotted before any file load) first, and only fall through to
+// the file-sourced origin when the shell provided neither variable.
 
+import { readFileSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { parseEnv } from "node:util";
 
 const here = dirname(fileURLToPath(import.meta.url));
-const publicDir = resolve(here, "..", "public");
+const webRoot = resolve(here, "..");
+const publicDir = resolve(webRoot, "public");
 
 const DEV_DEFAULT = "http://localhost:5173";
 
+/** Pick the first non-empty origin from a source's two origin variables. */
+const pickOrigin = (src) => src.APP_ORIGIN || src.VITE_APP_ORIGIN || "";
+
+// Snapshot the SHELL-provided origin BEFORE loading any file, so a shell value
+// (from either origin variable) always wins over a file value.
+const shellOrigin = pickOrigin(process.env);
+
+/**
+ * Merge a `.env`-style file into `process.env` for keys NOT already set by the
+ * shell, so an explicit `APP_ORIGIN=… npm run build` always wins. Later files in
+ * the load order (`.env.local`) override earlier ones (`.env`) but never the
+ * shell. A missing/unreadable file is a no-op (not every checkout ships one).
+ * Uses Node's built-in `util.parseEnv` (added in Node 20.12 — the package's
+ * `engines.node` floor is `>=20.12` to guarantee it), so no dotenv dependency.
+ */
+function loadEnvFile(name) {
+  let content;
+  try {
+    content = readFileSync(resolve(webRoot, name), "utf8");
+  } catch {
+    return; // file absent — fine.
+  }
+  const parsed = parseEnv(content);
+  for (const [key, value] of Object.entries(parsed)) {
+    // Shell-set values win; `.env.local` (loaded after `.env`) may fill what the
+    // shell left unset, overriding `.env` because `.env`'s key is now present —
+    // so track which keys WE set vs the shell set.
+    if (!shellKeys.has(key)) {
+      process.env[key] = value;
+    }
+  }
+}
+
+// Keys the SHELL set to a NON-EMPTY value before we load any file — these are
+// never overridden by a `.env*` file. An EMPTY shell var (`APP_ORIGIN=`) is
+// treated as ABSENT (consistent with the `||` chains, which skip empty values),
+// so it does NOT suppress a non-empty file-provided value.
+const shellKeys = new Set(
+  Object.entries(process.env)
+    .filter(([, value]) => value !== "" && value !== undefined)
+    .map(([key]) => key),
+);
+
+// Load order: `.env` first, then `.env.local` overrides it (both yield to shell).
+loadEnvFile(".env");
+loadEnvFile(".env.local");
+
 /** Resolve + validate the deployment origin. Throws on a malformed value. */
 function resolveOrigin() {
-  const raw = process.env.APP_ORIGIN || process.env.VITE_APP_ORIGIN || DEV_DEFAULT;
+  // Shell origin (snapshotted pre-load) wins across BOTH origin variables; only
+  // when the shell set neither do we use the now-merged (file-sourced) values.
+  const raw = shellOrigin || pickOrigin(process.env) || DEV_DEFAULT;
   let url;
   try {
     url = new URL(raw);

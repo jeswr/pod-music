@@ -7,7 +7,7 @@
   "author": "Claude Opus 4.8 (@jeswr PSS agent)",
   "license": "MIT",
   "engines": {
-    "node": ">=20"
+    "node": ">=20.12"
   },
   "scripts": {
     "gen:clientid": "node scripts/gen-clientid.mjs",

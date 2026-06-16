@@ -20,16 +20,57 @@
 //   always drives whichever <authorization-code-flow> element is currently live,
 //   never one a StrictMode remount removed. The mount effect writes the holder on
 //   mount; we never close over the first element.
+//
+// COLD-START SAFETY (roborev HIGH):
+//   The value written to the holder is a LAZY accessor `(uri, signal) =>
+//   ui.getCode(uri, signal)`, NOT an eagerly-bound `ui.getCode.bind(ui)`. On a COLD
+//   first mount the dynamically-imported reactive-auth chunk (which runs
+//   `customElements.define("authorization-code-flow", …)`) has not resolved yet, so
+//   the element is not upgraded and `ui.getCode` is `undefined` — eagerly reading or
+//   binding it at mount time would THROW and break first-load login. Reading
+//   `ui.getCode` only at CALL time (login time, after the import + registration have
+//   awaited) keeps the holder safe to populate on the very first synchronous mount.
 
-import type { GetCodeCallback } from "@solid/reactive-authentication";
+import type { AuthorizationCodeFlow, GetCodeCallback } from "@solid/reactive-authentication";
 
 /**
  * The CURRENT live <authorization-code-flow> element's `getCode`, in a stable
- * module-level holder. Each mount writes `element.getCode.bind(element)` here; the
- * singleton reads it lazily via {@link getCodeThroughHolder}. `null` until the
- * first element mounts (or after a deliberate clear).
+ * module-level holder. Each mount writes a LAZY accessor (see {@link
+ * lazyElementGetCode}) here; the singleton reads it via {@link
+ * getCodeThroughHolder}. `null` until the first element mounts (or after a
+ * deliberate clear).
  */
 export const authFlowHolder: { current: GetCodeCallback | null } = { current: null };
+
+/** The custom-element name registered by @solid/reactive-authentication. */
+export const AUTH_FLOW_ELEMENT = "authorization-code-flow";
+
+/**
+ * Build the LAZY `getCode` accessor a mount publishes to {@link authFlowHolder}.
+ *
+ * COLD-START SAFETY (roborev HIGH): on a COLD first mount the dynamically-imported
+ * reactive-auth chunk — whose top-level `customElements.define(AUTH_FLOW_ELEMENT,
+ * …)` upgrades the element — has not resolved yet, so `ui.getCode` is `undefined`.
+ * Eagerly reading/binding it at mount time (`ui.getCode.bind(ui)`) would THROW and
+ * break first-load login. This accessor reads `ui.getCode` only at CALL time (login
+ * time), with the correct `this` (= the element), and forwards both args. If the
+ * element is STILL not upgraded when first called (a very-early login racing the
+ * import), it awaits the custom-element registration first — so even that can't
+ * throw. `whenDefined` resolves immediately once the element is already registered.
+ *
+ * The parameter is typed as the upgraded {@link AuthorizationCodeFlow}, but the
+ * whole point is the RUNTIME case where the element is not yet upgraded and
+ * `getCode` is absent — hence the runtime `typeof` guard rather than relying on the
+ * static type.
+ */
+export function lazyElementGetCode(ui: AuthorizationCodeFlow): GetCodeCallback {
+  return async (authorizationUri, signal) => {
+    if (typeof ui.getCode !== "function") {
+      await customElements.whenDefined(AUTH_FLOW_ELEMENT);
+    }
+    return ui.getCode(authorizationUri, signal);
+  };
+}
 
 /**
  * A STABLE `getCode` for the page-lifetime auth singleton: it delegates to

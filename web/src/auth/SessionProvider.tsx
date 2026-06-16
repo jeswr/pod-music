@@ -34,7 +34,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { authFlowHolder, getCodeThroughHolder } from "./auth-flow-holder";
+import { authFlowHolder, getCodeThroughHolder, lazyElementGetCode } from "./auth-flow-holder";
 import { assessLoginProbe } from "./login-result";
 import { readProfile } from "./profile";
 import { type DerivedSession, deriveSession } from "./session-derivation";
@@ -212,7 +212,22 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     // the first element is unmounted right after this effect runs; the second mount
     // overwrites the holder with its (live) element — so the singleton never ends
     // up bound to a removed element.
-    const getCode: GetCodeCallback = ui.getCode.bind(ui);
+    //
+    // COLD-START SAFETY (roborev HIGH): @solid/reactive-authentication is loaded by
+    // a DYNAMIC import (`getAuthRuntime`), and `customElements.define(
+    // "authorization-code-flow", …)` lives at the top of that chunk. So on a COLD
+    // first mount this effect runs BEFORE the import resolves and BEFORE the element
+    // is upgraded — `ui.getCode` is still `undefined`. Eagerly binding it here
+    // (`ui.getCode.bind(ui)`) would THROW on that very first load and break login.
+    //
+    // The holder therefore gets a LAZY accessor (`lazyElementGetCode`) that reads
+    // `getCode` at CALL time (login time), not at mount time. By the time the
+    // singleton invokes it (inside `login()`, which has awaited the dynamic import +
+    // element registration), the element is upgraded and `getCode` is defined; and
+    // as belt-and-braces the accessor awaits `customElements.whenDefined` first if
+    // the element is somehow still un-upgraded — so even a very-early login can't
+    // throw. We do NOT touch `ui.getCode` until invocation.
+    const getCode: GetCodeCallback = lazyElementGetCode(ui);
     authFlowHolder.current = getCode;
     getAuthRuntime({
       callbackUri: new URL("/callback.html", location.href).toString(),
