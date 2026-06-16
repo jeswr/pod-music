@@ -1,0 +1,45 @@
+{
+  "name": "@jeswr/pod-music-web",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "description": "Static SPA host shell for Pod Music — standalone Solid login + the @jeswr/pod-music MusicLibrary, served as a static dist/ by any file server.",
+  "author": "Claude Opus 4.8 (@jeswr PSS agent)",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20.12"
+  },
+  "scripts": {
+    "gen:clientid": "node scripts/gen-clientid.mjs",
+    "dev": "node scripts/gen-clientid.mjs && vite",
+    "build": "node scripts/gen-clientid.mjs && vite build",
+    "preview": "vite preview",
+    "lint": "biome check src scripts",
+    "lint:fix": "biome check --write src scripts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@jeswr/fetch-rdf": "^0.1.0",
+    "@rdfjs/wrapper": "^0.34.0",
+    "@solid/object": "^0.6.0",
+    "@solid/reactive-authentication": "^0.1.3",
+    "dpop": "^2.1.1",
+    "n3": "^2.0.3",
+    "oauth4webapi": "^3.8.6",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.5.0",
+    "@rdfjs/types": "^2.0.1",
+    "@types/n3": "^1.26.1",
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^5.2.0",
+    "typescript": "^5.9.0",
+    "vite": "^7.0.0",
+    "vitest": "^4.1.8"
+  }
+}
