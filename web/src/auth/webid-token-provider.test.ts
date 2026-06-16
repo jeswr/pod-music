@@ -59,6 +59,10 @@ const dpopMock = vi.hoisted(() => ({
   calls: [] as unknown[][],
   gate: null as Promise<void> | null,
   onEnter: null as (() => void) | null,
+  // The CryptoKeyPair the LAST oauth.DPoP() call received — captured so a test can
+  // assert completeRedirectLogin re-imported the persisted JWK with the right
+  // extractability (private non-extractable, public extractable).
+  lastKeyPair: null as CryptoKeyPair | null,
 }));
 vi.mock("dpop", () => ({
   generateProof: vi.fn(async (...args: unknown[]) => {
@@ -77,7 +81,13 @@ vi.mock("oauth4webapi", () => {
     ClientSecretBasic: () => () => {},
     expectNoNonce: Symbol("expectNoNonce"),
     nopkce: Symbol("nopkce"),
-    DPoP: () => ({}),
+    // Capture the rebuilt CryptoKeyPair completeRedirectLogin hands to DPoP so a test
+    // can assert the re-imported key's extractability (private non-extractable, public
+    // extractable — RFC 9449 §4.2). Honours the real handle shape (returns an object).
+    DPoP: vi.fn((_client: unknown, keyPair?: CryptoKeyPair) => {
+      dpopMock.lastKeyPair = keyPair ?? null;
+      return {};
+    }),
     discoveryRequest: vi.fn(async () => ({})),
     processDiscoveryResponse: vi.fn(async () => ({
       issuer: "https://issuer.example/",
@@ -923,6 +933,7 @@ describe("AUTOLOGIN — two-phase full-page redirect login (beginRedirectLogin /
     authState.accessToken = "tok-A";
     dpopMock.gate = null;
     dpopMock.onEnter = null;
+    dpopMock.lastKeyPair = null;
     store = installSessionStorage();
   });
 
@@ -1020,6 +1031,29 @@ describe("AUTOLOGIN — two-phase full-page redirect login (beginRedirectLogin /
     const upgraded = await provider.upgrade(new Request("https://alice.example/storage/"));
     expect(upgraded.headers.get("Authorization")).toBe("DPoP tok-A");
     // No SECOND getCode/popup was needed — the redirect path established the session.
+  });
+
+  it("completeRedirectLogin re-imports the DPoP key NON-extractable (private) + extractable (public, RFC 9449 §4.2)", async () => {
+    const provider = makeProvider();
+    await provider.beginRedirectLogin(RETURN_URI);
+    await provider.completeRedirectLogin(`${RETURN_URI}?code=auth-code&state=state`);
+
+    // completeRedirectLogin re-imported the persisted JWK and handed the rebuilt
+    // CryptoKeyPair to oauth.DPoP — we captured it via the DPoP mock.
+    const keyPair = dpopMock.lastKeyPair;
+    expect(keyPair).not.toBeNull();
+    const { privateKey, publicKey } = keyPair as CryptoKeyPair;
+
+    // SECURITY: the re-imported PRIVATE signing key MUST be non-extractable — it was
+    // exportable only to survive the redirect; once re-imported it is never re-exported.
+    expect(privateKey.extractable).toBe(false);
+    // The PUBLIC key MUST be extractable — DPoP exports it as the proof-header JWK.
+    expect(publicKey.extractable).toBe(true);
+
+    // Adversarial proof, not just the flag: exporting the public key SUCCEEDS while
+    // exporting the private key REJECTS (the WebCrypto extractability guarantee).
+    await expect(crypto.subtle.exportKey("jwk", publicKey)).resolves.toBeTruthy();
+    await expect(crypto.subtle.exportKey("jwk", privateKey)).rejects.toThrow();
   });
 
   it("completeRedirectLogin on a BAD state throws AND leaves the provider reset-clean (record cleared)", async () => {

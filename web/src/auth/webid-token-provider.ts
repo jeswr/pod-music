@@ -1437,20 +1437,23 @@ export class WebIdDPoPTokenProvider implements TokenProvider {
         response_types: ["code"],
       };
 
-      // Re-import the persisted ES256 DPoP key (extractable so it survived the
-      // redirect) and rebuild the DPoP handle for the token exchange.
+      // Re-import the persisted ES256 DPoP key and rebuild the DPoP handle for the
+      // token exchange. The private key was EXPORTABLE only so the JWK could survive
+      // the full-page redirect — once re-imported here for signing it has no further
+      // need to be exported, so we re-import it NON-extractable (matches the popup
+      // path's non-extractable signing key + the sibling pod-apps' canonical pattern).
       const privateKey = await crypto.subtle.importKey(
         "jwk",
         flow.dpopPrivateJwk,
         ES256_IMPORT_ALG,
-        true,
+        false, // non-extractable: re-imported for signing only, never re-exported
         ["sign"],
       );
       const publicKey = await crypto.subtle.importKey(
         "jwk",
         flow.dpopPublicJwk,
         ES256_IMPORT_ALG,
-        true,
+        true, // public key MUST be extractable: dpop exports it as the proof-header JWK (RFC 9449 §4.2). Public keys are not secret; only the private key stays non-extractable.
         ["verify"],
       );
       if (generation !== this.#generation) throw new ReactiveAuthResetError();
