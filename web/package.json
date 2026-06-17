@@ -14,14 +14,16 @@
     "dev": "node scripts/gen-clientid.mjs && vite",
     "build": "node scripts/gen-clientid.mjs && vite build",
     "preview": "vite preview",
-    "lint": "biome check src scripts test vite.config.ts vitest.config.ts",
+    "lint": "biome check src scripts test vite.config.ts vitest.config.ts && npm run check:lockfile-transport",
     "lint:fix": "biome check --write src scripts test vite.config.ts vitest.config.ts",
+    "check:lockfile-transport": "node scripts/check-lockfile-transport.mjs",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },
   "dependencies": {
-    "@jeswr/app-shell": "github:jeswr/app-shell#main",
+    "@jeswr/app-shell": "git+https://github.com/jeswr/app-shell.git#5a7484df818071e24adaf4833d92f836e1c8d6e2",
     "@jeswr/fetch-rdf": "^0.1.0",
+    "@jeswr/solid-elements": "git+https://github.com/jeswr/solid-elements.git#62674582f20e1b0f52eef15a72dcdf3979f7c258",
     "@jeswr/solid-session-restore": "git+https://github.com/jeswr/solid-session-restore.git#f501aec",
     "@radix-ui/react-avatar": "^1.2.0",
     "@radix-ui/react-dropdown-menu": "^2.1.18",

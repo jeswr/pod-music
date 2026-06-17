@@ -18,7 +18,18 @@
    names (--bg/--ink/…). Map them onto the app-shell OKLCH tokens so the WHOLE
    pod-music UI (login card, header, library table) follows the theme — the
    `.dark` class the ThemeProvider toggles on <html> flips the OKLCH vars, and
-   these aliases inherit it for free. */
+   these aliases inherit it for free.
+
+   CSS-ISOLATION (#80 / solid-elements rollout #67/#68/#70): the host vars alias
+   DIRECTLY onto app-shell's OWN tokens (`--accent`=`--primary`, `--muted`=
+   `--muted-foreground`) — the SIMPLE form. (pod-music was scaffolded WITHOUT the
+   early-adopter host-only-name workaround, so there is nothing to relax here; this
+   note records WHY the simple form is safe and the css-isolation.test.tsx guard
+   defends it.) @jeswr/app-shell #80 made the shell self-isolating: its components
+   read SHELL-PRIVATE `--as-*` tokens (mirrored from hardcoded OKLCH literals in the
+   package's tokens.css, NOT from these public `--accent`/`--muted`), so re-aliasing
+   the public tokens does not affect the shell. Verified against app-shell `5a7484d`
+   (the merged main with the #80 fix). */
 :root {
   --bg: var(--background);
   --surface: var(--card);
@@ -99,6 +110,18 @@ a {
   margin-top: 1rem;
 }
 
+/* CSS-ISOLATION (#80 / solid-elements rollout #67/#68/#70): a BARE global `button {}`
+   filled base. This unlayered element rule out-ranks Tailwind's layered utilities, so it
+   historically bled the host's filled look onto every app-shell control + the portaled
+   FeedbackDialog (#80) — which forced early adopters to hand-scope it to `.login-form
+   button`. @jeswr/app-shell #80 fixed this AT THE SOURCE: the shell tags each of its
+   controls with `[data-app-shell-control]` and re-asserts their look in its own UNLAYERED
+   reset (shipped in `@jeswr/app-shell/styles.css`), and an attribute selector out-ranks a
+   bare element selector — so the shell's controls keep their look regardless of this rule.
+   The solid-elements P0 components (<jeswr-loading> etc.) are immune for a different
+   reason: they live in shadow DOM, which this light-DOM rule cannot pierce. So the
+   hand-scoping is not needed; css-isolation.test.tsx guards both contracts. Verified
+   against app-shell `5a7484d`. */
 button {
   cursor: pointer;
   border: none;
