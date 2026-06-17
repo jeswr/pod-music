@@ -110,19 +110,28 @@ a {
   margin-top: 1rem;
 }
 
-/* CSS-ISOLATION (#80 / solid-elements rollout #67/#68/#70): a BARE global `button {}`
-   filled base. This unlayered element rule out-ranks Tailwind's layered utilities, so it
-   historically bled the host's filled look onto every app-shell control + the portaled
-   FeedbackDialog (#80) — which forced early adopters to hand-scope it to `.login-form
-   button`. @jeswr/app-shell #80 fixed this AT THE SOURCE: the shell tags each of its
-   controls with `[data-app-shell-control]` and re-asserts their look in its own UNLAYERED
-   reset (shipped in `@jeswr/app-shell/styles.css`), and an attribute selector out-ranks a
-   bare element selector — so the shell's controls keep their look regardless of this rule.
+/* CSS-ISOLATION (#80 / solid-elements rollout #67/#68/#70 / #121 safe form): the host
+   filled-button base, SCOPED to `button:not([data-app-shell-control])`.
+
+   WHY THE `:not(...)` SCOPE (#121 box-model safe form, a roborev Medium): this rule is
+   UNLAYERED, so it out-ranks Tailwind's layered utilities. @jeswr/app-shell #80 makes the
+   shell self-isolating for COLOUR — its UNLAYERED reset re-asserts each control's
+   background/border/text via `[data-app-shell-control]`, which out-ranks a bare
+   `button {}`. BUT that reset DELIBERATELY does NOT touch the BOX MODEL
+   (padding/border-radius/font-size/sizing) — the shell components set those per instance
+   via LAYERED `className` utilities (e.g. ThemeToggle's `size-9`, AccountMenu's
+   `h-auto px-2 py-1.5`), which an unlayered `button { padding; border-radius; font-size }`
+   WOULD clobber, distorting the icon/menu buttons. So a bare `button {}` is NOT fully
+   safe even under #80. The `:not([data-app-shell-control])` scope excludes every app-shell
+   control from the host base entirely, so the shell's box model survives unimpeded —
+   strictly safer than the bare form, while the host's OWN buttons (the section nav, the
+   error retry — no app-shell marker) still get the filled base + their overrides below.
+
    The solid-elements P0 components (<jeswr-loading> etc.) are immune for a different
-   reason: they live in shadow DOM, which this light-DOM rule cannot pierce. So the
-   hand-scoping is not needed; css-isolation.test.tsx guards both contracts. Verified
-   against app-shell `5a7484d`. */
-button {
+   reason: they live in shadow DOM, which this light-DOM rule cannot pierce. The
+   css-isolation.test.tsx guard pins the colour-isolation contract; this `:not(...)` scope
+   additionally protects the box model. Verified against app-shell `5a7484d`. */
+button:not([data-app-shell-control]) {
   cursor: pointer;
   border: none;
   border-radius: 0.5rem;
@@ -131,7 +140,7 @@ button {
   background: var(--accent);
   color: var(--accent-ink);
 }
-button:disabled {
+button:not([data-app-shell-control]):disabled {
   opacity: 0.55;
   cursor: not-allowed;
 }
@@ -199,15 +208,20 @@ button:disabled {
   margin: 0;
   padding: 0;
 }
-.pod-music-section,
-.pod-music-section-active {
+/* The library-section nav buttons (host buttons, no app-shell marker). Selected as
+   `button.pod-music-section[-active]` to match the scoped base's specificity (0,1,1)
+   and win by source order — a bare `.pod-music-section` (0,1,0) would lose its
+   transparent background to the filled base above. They inherit cursor/radius/padding/
+   font-size from the base. */
+button.pod-music-section,
+button.pod-music-section-active {
   border: 1px solid var(--border);
 }
-.pod-music-section {
+button.pod-music-section {
   background: transparent;
   color: var(--accent);
 }
-.pod-music-section-active {
+button.pod-music-section-active {
   background: var(--accent);
   color: var(--accent-ink);
 }
