@@ -10,3 +10,9 @@
 # Local env overrides
 .env
 .env.local
+
+# Playwright e2e artifacts + the global-setup seeded-account sidecar (regenerated
+# each run from a fresh local CSS pod — never committed).
+/test-results
+/playwright-report
+/tests/e2e/.seeded-account.json

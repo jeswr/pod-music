@@ -546,15 +546,33 @@ export class WebIdDPoPTokenProvider implements TokenProvider {
     this.#sessionStore = options.sessionStore;
   }
 
-  /** oauth4webapi request options, enabling insecure loopback per the policy. */
+  /** oauth4webapi request options, enabling insecure loopback per the policy.
+   *
+   * REENTRANCY GUARD (task #123): every oauth4webapi request (OIDC discovery, the
+   * token-endpoint grant, refresh) MUST run on the PRISTINE fetch (`#profileFetch`,
+   * captured before any global patch), NOT the patched `globalThis.fetch`. The proactive
+   * auth-fetch patch (@jeswr/solid-elements/auth) calls THIS provider's `upgrade()` for any
+   * allowed-origin request — and the OIDC endpoints live on the issuer origin, which IS in
+   * the credential boundary. Without pinning `customFetch`, an internal token-endpoint
+   * request would re-enter the patched global → call `upgrade()` again → recurse / deadlock
+   * login, and would clobber the token-endpoint's own `Authorization` (client-credentials /
+   * none) with the resource DPoP token (the roborev HIGH finding, and the cause the e2e
+   * login hung). `#profileFetch` is the un-patched native fetch, so these requests never
+   * re-enter the wrapper.
+   */
   #httpOptions(
     issuer: URL,
     signal: AbortSignal,
-  ): { signal: AbortSignal; [oauth.allowInsecureRequests]?: true } {
+  ): {
+    signal: AbortSignal;
+    [oauth.customFetch]: typeof fetch;
+    [oauth.allowInsecureRequests]?: true;
+  } {
+    const base = { signal, [oauth.customFetch]: this.#profileFetch };
     if (this.#allowInsecureLoopback && isLoopback(issuer.hostname)) {
-      return { signal, [oauth.allowInsecureRequests]: true };
+      return { ...base, [oauth.allowInsecureRequests]: true };
     }
-    return { signal };
+    return base;
   }
 
   /**

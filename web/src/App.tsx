@@ -4,7 +4,10 @@
 // → a thin header (WebID + logout) over the LOCAL @jeswr/pod-music <MusicLibrary>
 // pointed at the user's music library container. The library receives NO `fetch`
 // prop — it uses the ambient global fetch, which the SessionProvider patched via
-// reactive-auth's registerGlobally(), so every read carries the DPoP token.
+// the @jeswr/solid-elements PROACTIVE auth-fetch (task #123), so every read carries
+// the DPoP token automatically AND up front (the token is attached on the FIRST
+// request to the pod origin — no per-resource 401-dance; the library reads N track
+// resources, which previously paid N+1 wasted 401s. See auth/SessionProvider.tsx).
 //
 // MUSIC-BASE RESOLUTION: <MusicLibrary base /> needs the music library CONTAINER
 // (the data layer derives `tracks/`/`albums/`/`playlists/` under it), not a bare

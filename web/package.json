@@ -14,16 +14,17 @@
     "dev": "node scripts/gen-clientid.mjs && vite",
     "build": "node scripts/gen-clientid.mjs && vite build",
     "preview": "vite preview",
-    "lint": "biome check src scripts test vite.config.ts vitest.config.ts && npm run check:lockfile-transport",
-    "lint:fix": "biome check --write src scripts test vite.config.ts vitest.config.ts",
+    "lint": "biome check src scripts test tests vite.config.ts vitest.config.ts playwright.config.ts && npm run check:lockfile-transport",
+    "lint:fix": "biome check --write src scripts test tests vite.config.ts vitest.config.ts playwright.config.ts",
     "check:lockfile-transport": "node scripts/check-lockfile-transport.mjs",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:e2e": "playwright test"
   },
   "dependencies": {
     "@jeswr/app-shell": "git+https://github.com/jeswr/app-shell.git#5a7484df818071e24adaf4833d92f836e1c8d6e2",
     "@jeswr/fetch-rdf": "^0.1.0",
-    "@jeswr/solid-elements": "git+https://github.com/jeswr/solid-elements.git#df0fbe4639e2cf79ad28bb0410483fb5ca3eb24c",
+    "@jeswr/solid-elements": "git+https://github.com/jeswr/solid-elements.git#18fae0d0735a9af0cf0cafc9df5ff50c8518fb78",
     "@jeswr/solid-session-restore": "git+https://github.com/jeswr/solid-session-restore.git#f501aec",
     "@radix-ui/react-avatar": "^1.2.0",
     "@radix-ui/react-dropdown-menu": "^2.1.18",
@@ -39,6 +40,7 @@
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.0",
+    "@playwright/test": "^1.60.0",
     "@rdfjs/types": "^2.0.1",
     "@tailwindcss/vite": "^4.3.1",
     "@testing-library/jest-dom": "^6.6.3",
@@ -48,6 +50,7 @@
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "@vitejs/plugin-react": "^5.2.0",
+    "jose": "^6.2.3",
     "jsdom": "^26.0.0",
     "tailwindcss": "^4.3.1",
     "typescript": "^5.9.0",
