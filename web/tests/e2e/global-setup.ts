@@ -149,6 +149,14 @@ export default async function globalSetup() {
   //    to `tracks/track-K.ttl` auto-creates the `tracks/` container; each track is a
   //    distinct URL the MusicLibrary GETs individually when the library loads (the
   //    listing + one read per track), so N tracks => N+1 reads.
+  // Pre-create the `music/` + `tracks/` CONTAINERS before PUTting the track documents into
+  // them (pod-health found the seed needs the container pre-created): CSS auto-creates
+  // intermediate containers on a resource PUT (so the e2e passes without this), but an
+  // explicit container PUT first makes the seed robust on a server that does NOT auto-create
+  // — and is idempotent/harmless on CSS. An LDP BasicContainer create is a PUT of
+  // `text/turtle` to the trailing-slash URL.
+  await authedPut(MUSIC_BASE, "", "text/turtle");
+  await authedPut(TRACKS_CONTAINER, "", "text/turtle");
   for (let k = 0; k < TRACK_COUNT; k++) {
     await authedPut(
       `${TRACKS_CONTAINER}track-${k}.ttl`,

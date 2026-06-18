@@ -705,7 +705,7 @@ export class WebIdDPoPTokenProvider implements TokenProvider {
    * persistence failure must not fail an otherwise-good login). The refresh token is
    * never logged.
    */
-  async persistSession(issuer: URL, webId: string): Promise<boolean> {
+  async persistSession(issuer: URL, webId: string, expectGeneration?: number): Promise<boolean> {
     const store = this.#sessionStore;
     if (!store) return false;
     const pending = this.#sessions.get(issuer.href);
@@ -716,6 +716,19 @@ export class WebIdDPoPTokenProvider implements TokenProvider {
     } catch {
       return false; // the session failed to establish — nothing to persist.
     }
+    // SUPERSESSION FENCE (roborev HIGH) — re-check AFTER the `await pending` above and
+    // BEFORE enqueueing the durable put. `await pending` yields the microtask queue, so a
+    // logout()/new login() can `reset()` (which BUMPS #generation AND clears #sessions /
+    // #authenticatedWebId) WHILE this is parked. Without this re-check, a stale establish
+    // racing a logout would resume here and enqueue a put AFTER the logout's delete —
+    // RESURRECTING the logged-out credential on disk (a same-tick reload would then silently
+    // restore a session the user just signed out of). The caller passes the generation it
+    // snapshotted for THIS login; if it has advanced — or the live authenticated WebID is no
+    // longer the one we are persisting — we are superseded: refuse to enqueue the put.
+    // (Backwards-compatible: `expectGeneration` omitted ⇒ no generation check, preserving the
+    // pre-fence callers; the WebID re-check still applies.)
+    if (expectGeneration !== undefined && this.#generation !== expectGeneration) return false;
+    if (!webIdsEqual(this.#authenticatedWebId, webId)) return false;
     // Only persist when there is actually a refresh credential AND the persisted
     // record's WebID is the one we confirmed (defence-in-depth — the caller already
     // proved this, but a credential store write must never record a mismatched id).

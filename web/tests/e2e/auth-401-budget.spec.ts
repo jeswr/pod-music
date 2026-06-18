@@ -164,25 +164,36 @@ test.describe("401-budget — the proactive auth-fetch eliminates the 401-dance"
     });
 
     const loggedIn = await login(page, seeded);
-    // SKIP-vs-FAIL on a non-completing popup login (roborev MEDIUM finding): in CI the
-    // login MUST complete — a non-completing popup is a genuine regression (e.g. the
-    // <authorization-code-flow> element failing to register), so we FAIL, never mask it.
-    // Only OUTSIDE CI (a constrained local worktree where the headless popup is flaky) do
-    // we skip-with-reason so a local run isn't falsely red. The proactive-fetch behaviour
-    // is independently covered by the unit tests either way.
+    // FAIL-CLOSED on a non-completing popup login (roborev MEDIUM): a non-completing popup is
+    // a genuine regression (e.g. the <authorization-code-flow> element failing to register, or
+    // the popup never opening), so by DEFAULT we FAIL — never silently mask it. The skip is
+    // allowed ONLY when the explicit opt-in (`ALLOW_E2E_POPUP_SKIP=1`) is set AND we are NOT in
+    // CI — a constrained local worktree where the headless reactive-auth dialog→window.open flow
+    // is known-flaky. CI is AUTHORITATIVE: `process.env.CI` forces a hard FAILURE even if the
+    // opt-in is mistakenly set in the CI environment, so a misconfigured CI can never pass
+    // without exercising the only e2e assertion for this change. The proactive-fetch behaviour
+    // is independently covered by the unit tests (the webid-token-provider re-entrancy guard) +
+    // @jeswr/solid-elements' own unit tests.
     if (!loggedIn) {
-      if (process.env.CI) {
+      // Strict opt-in: ONLY the literal `ALLOW_E2E_POPUP_SKIP=1` enables the skip (roborev
+      // LOW) — `0`/`false`/any other value does NOT, matching the error text + comments
+      // above. CI is still authoritative (forces a FAILURE even if the flag is set).
+      if (process.env.CI || process.env.ALLOW_E2E_POPUP_SKIP !== "1") {
         throw new Error(
-          "Interactive OIDC popup login did not complete in CI — this is a genuine " +
-            "regression (e.g. the <authorization-code-flow> custom element not registering, " +
-            "or the popup never opening), NOT acceptable flakiness. Investigate before merge.",
+          "Interactive OIDC popup login did not complete — this is a genuine regression " +
+            "(e.g. the <authorization-code-flow> custom element not registering, or the " +
+            "popup never opening), NOT acceptable flakiness. Set ALLOW_E2E_POPUP_SKIP=1 ONLY " +
+            "for a constrained LOCAL worktree where the headless popup is known-flaky; it is " +
+            "IGNORED in CI (process.env.CI), so a required gate always fails on a " +
+            "non-completing login.",
         );
       }
       test.skip(
         true,
-        "Interactive OIDC popup login could not be driven under headless Chromium in this " +
-          "local worktree (known reactive-auth dialog→window.open flakiness). Set CI=1 to " +
-          "treat a non-completing login as a FAILURE instead of a skip.",
+        "Interactive OIDC popup login could not be driven under headless Chromium and " +
+          "ALLOW_E2E_POPUP_SKIP=1 was set OUTSIDE CI (constrained local worktree; known " +
+          "reactive-auth dialog→window.open flakiness). Unset it (or run in CI) to treat a " +
+          "non-completing login as a FAILURE.",
       );
     }
 
