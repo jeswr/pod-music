@@ -1608,12 +1608,17 @@ export class WebIdDPoPTokenProvider implements TokenProvider {
     return oauth.processDynamicClientRegistrationResponse(registrationResponse);
   }
 
-  /** Client authentication, mirroring the published provider's ESS workaround. */
+  /**
+   * Client authentication for the token-endpoint grants, mirroring the hardened
+   * confidential-client logic in @jeswr/solid-session-restore (`buildClientAuth`):
+   * the EXACT-hostname ESS no-url-encode workaround + FAIL-CLOSED on an unsupported
+   * `token_endpoint_auth_method`. Delegates to the pure {@link buildClientAuth} so the
+   * decision is unit-testable in isolation. Throws when a confidential client declares
+   * a method we cannot honour (or declares confidential auth but carries no secret) —
+   * we must never silently downgrade to `none` and send the wrong (or no) credential.
+   */
   #clientAuth(issuer: string, client: oauth.Client): oauth.ClientAuth {
-    if (client.token_endpoint_auth_method === "client_secret_basic") {
-      return clientSecretBasicFor(issuer)(client.client_secret as string);
-    }
-    return oauth.None();
+    return buildClientAuth(issuer, client);
   }
 
   /** Some servers (NSS/ESS variants) omit the nonce; expect none for them. */
@@ -1715,8 +1720,39 @@ export function isInvalidScopeError(e: unknown): boolean {
 }
 
 /**
- * A variant of oauth4webapi's ClientSecretBasic that does NOT url-encode id and
- * secret — PodSpaces (ESS) fails when the spec is followed.
+ * The token-endpoint auth methods this provider SUPPORTS — exactly `none`,
+ * `client_secret_basic`, and `client_secret_post`. Any other defined value
+ * (`client_secret_jwt` / `private_key_jwt` / `tls_client_auth`) is unsupported and
+ * must FAIL CLOSED rather than silently downgrade to `none`. Mirrors
+ * @jeswr/solid-session-restore's `TokenEndpointAuthMethod`.
+ */
+type TokenEndpointAuthMethod = "none" | "client_secret_basic" | "client_secret_post";
+
+/**
+ * Whether a token-endpoint auth method is one this provider can honour. Accepts an
+ * unknown value because the method comes from a dynamic-registration response / a
+ * static client object (loosely typed). An unsupported method → false → fail closed.
+ */
+export function isSupportedTokenEndpointAuthMethod(
+  method: unknown,
+): method is TokenEndpointAuthMethod {
+  return method === "none" || method === "client_secret_basic" || method === "client_secret_post";
+}
+
+/** Whether a (supported) method actually requires a client secret. */
+function isConfidentialMethod(
+  method: TokenEndpointAuthMethod,
+): method is "client_secret_basic" | "client_secret_post" {
+  return method === "client_secret_basic" || method === "client_secret_post";
+}
+
+/**
+ * A variant of oauth4webapi's {@link oauth.ClientSecretBasic} that does NOT
+ * URL-encode the client_id / secret before base64. PodSpaces (Inrupt ESS) rejects
+ * the spec-compliant `application/x-www-form-urlencoded` form (RFC 6749 §2.3.1 /
+ * Appendix B) and expects the raw values — a BESPOKE per-server workaround, scoped
+ * to ESS issuers only. The standard, spec-following encoder is used for every other
+ * server.
  * @see https://www.rfc-editor.org/rfc/rfc6749.html#section-2.3.1
  */
 function noUrlEncodeClientSecretBasic(clientSecret: string): oauth.ClientAuth {
@@ -1725,9 +1761,76 @@ function noUrlEncodeClientSecretBasic(clientSecret: string): oauth.ClientAuth {
   };
 }
 
+/** The ESS host whose token endpoint rejects the spec form-url-encoded Basic creds. */
+const ESS_NO_URL_ENCODE_HOST = "login.inrupt.com";
+
+/**
+ * Whether an issuer is the Inrupt ESS host that needs the no-url-encode workaround,
+ * matched on the EXACT hostname (an unparseable issuer → false, so we never apply the
+ * bespoke path to an unknown issuer). This is STRICTER than a substring `includes`
+ * check — an exact host match cannot be tricked by a spoofed host whose URL merely
+ * CONTAINS the substring (e.g. `login.inrupt.com.attacker.example`, or a path/subdomain
+ * segment), which would otherwise send a non-standard Basic header to the wrong server.
+ * Mirrors @jeswr/solid-session-restore's `isEssNoUrlEncodeIssuer`.
+ */
+export function isEssNoUrlEncodeIssuer(issuer: string): boolean {
+  try {
+    return new URL(issuer).hostname === ESS_NO_URL_ENCODE_HOST;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Pick the `client_secret_basic` constructor for an issuer: the BESPOKE
+ * non-URL-encoding variant for Inrupt ESS (`login.inrupt.com`, exact host) — which
+ * rejects the spec encoding — and the standard, RFC-6749-§2.3.1-compliant
+ * {@link oauth.ClientSecretBasic} for every other server.
+ */
 function clientSecretBasicFor(issuer: string): (secret: string) => oauth.ClientAuth {
-  if (issuer.includes("login.inrupt.com")) return noUrlEncodeClientSecretBasic;
-  return oauth.ClientSecretBasic;
+  return isEssNoUrlEncodeIssuer(issuer) ? noUrlEncodeClientSecretBasic : oauth.ClientSecretBasic;
+}
+
+/**
+ * Build the oauth4webapi {@link oauth.ClientAuth} for a resolved client, FAIL-CLOSED.
+ * PUBLIC clients (`none`, the static-Client-Identifier-Document / PKCE default) → no
+ * client auth. CONFIDENTIAL clients present their secret per the declared method (RFC
+ * 6749 §2.3.1 / OIDC Core §9): `client_secret_basic` via the Basic header (with the
+ * exact-host ESS no-url-encode workaround), `client_secret_post` via the form body.
+ *
+ * THROWS rather than silently downgrading to `none` when (a) the declared method is a
+ * DEFINED-but-UNSUPPORTED one (`client_secret_jwt` / `private_key_jwt` /
+ * `tls_client_auth`, etc.), or (b) a confidential method is declared but NO secret is
+ * present — either silent `none` would mis-authenticate, and on some servers
+ * succeed-as-public when the user intended a confidential client. Mirrors
+ * @jeswr/solid-session-restore's fail-closed `buildClientAuth`.
+ */
+export function buildClientAuth(issuer: string, client: oauth.Client): oauth.ClientAuth {
+  // Default to the public `none` method ONLY when the method is genuinely OMITTED
+  // (`undefined`); any DEFINED value — including a present-but-`null` one coming through
+  // oauth.Client's loose `[metadata]: JsonValue | undefined` index signature — must fall
+  // through to `isSupportedTokenEndpointAuthMethod` and fail closed, never silently
+  // downgrade to `none`. (`?? "none"` would have treated `null` as omitted.)
+  const method =
+    client.token_endpoint_auth_method === undefined ? "none" : client.token_endpoint_auth_method;
+  if (!isSupportedTokenEndpointAuthMethod(method)) {
+    throw new Error(
+      `Unsupported token_endpoint_auth_method "${String(
+        method,
+      )}" — refusing to authenticate (fail-closed; will not downgrade to "none").`,
+    );
+  }
+  if (!isConfidentialMethod(method)) return oauth.None();
+  const secret = client.client_secret;
+  if (typeof secret !== "string" || secret === "") {
+    throw new Error(
+      `Confidential client declared "${method}" but no client_secret is available — ` +
+        "refusing to authenticate (fail-closed).",
+    );
+  }
+  return method === "client_secret_post"
+    ? oauth.ClientSecretPost(secret)
+    : clientSecretBasicFor(issuer)(secret);
 }
 
 // NOTE: the upstream reference `promptWebIdDialog` (a default `getWebId` UI) is
