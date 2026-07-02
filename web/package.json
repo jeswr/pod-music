@@ -22,7 +22,7 @@
     "test:e2e": "playwright test"
   },
   "dependencies": {
-    "@jeswr/app-shell": "git+https://github.com/jeswr/app-shell.git#5a7484df818071e24adaf4833d92f836e1c8d6e2",
+    "@jeswr/app-shell": "git+https://github.com/jeswr/app-shell.git#e2ad58b166e9c2e5f0e30d88029847abc05b42e2",
     "@jeswr/fetch-rdf": "^0.1.0",
     "@jeswr/solid-elements": "git+https://github.com/jeswr/solid-elements.git#18fae0d0735a9af0cf0cafc9df5ff50c8518fb78",
     "@jeswr/solid-session-restore": "git+https://github.com/jeswr/solid-session-restore.git#f501aec",

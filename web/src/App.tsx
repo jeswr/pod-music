@@ -16,7 +16,13 @@
 // `tracks/` container), falling back to the conventional `${podRoot}music/` and
 // surfacing a banner when no registration is found (see session-derivation.ts).
 
-import { AccountMenu, FeedbackButton, ThemeToggle } from "@jeswr/app-shell";
+import {
+  AccountMenu,
+  Button,
+  FeedbackButton,
+  ThemeToggle,
+  useSolidExtensionPresent,
+} from "@jeswr/app-shell";
 import { MusicStore } from "@jeswr/pod-music";
 import { MusicLibrary } from "@jeswr/pod-music/ui";
 // SOLID-ELEMENTS (#67/#68/#70 D-parity rollout): the framework-agnostic W3C Web
@@ -39,6 +45,10 @@ export function App() {
   const { webId, session, logout, autologinPending, restoring } = useSession();
   // The resolved music base + how it was discovered; null while resolving.
   const [musicBase, setMusicBase] = useState<MusicBase | null>(null);
+  // Is the @jeswr Solid browser extension present? When it is, it owns the account
+  // surface (its pinned avatar menu), so the app's own <AccountMenu/> would duplicate
+  // it — hide it, but keep a minimal Sign-out for this app's OWN session (below).
+  const extensionPresent = useSolidExtensionPresent();
 
   // Resolve the music library container once we have a session. The store's
   // `fetch` defaults to the global fetch (now auth-patched), so discovery reads
@@ -135,12 +145,26 @@ export function App() {
             webId={webId}
           />
           <ThemeToggle />
-          <AccountMenu
-            webId={webId}
-            displayName={session.displayName}
-            avatarUrl={session.avatarUrl}
-            onSignOut={logout}
-          />
+          {/* When the browser extension is present it owns the account surface (its pinned
+              avatar menu shows identity + sign-out), so the app's full <AccountMenu/> — avatar,
+              display name, WebID — would DUPLICATE it. We drop that duplicated profile display.
+              But pod-music still holds its OWN independent SessionProvider session here (it has
+              not yet been wired to consume the extension's identity — the bead's "skip own login
+              when extension present" follow-up), so we must NOT strand the user: keep a minimal
+              Sign-out control that calls this app's own logout. Once the app consumes the
+              extension's identity (no independent session to sign out of), even this goes. */}
+          {extensionPresent ? (
+            <Button variant="ghost" onClick={logout}>
+              Sign out
+            </Button>
+          ) : (
+            <AccountMenu
+              webId={webId}
+              displayName={session.displayName}
+              avatarUrl={session.avatarUrl}
+              onSignOut={logout}
+            />
+          )}
         </div>
       </header>
       {session.podRootIsFallback ? (
