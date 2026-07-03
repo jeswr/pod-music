@@ -16,13 +16,35 @@
     "lint": "@biomejs/biome ^2.x",
     "node": ">=22"
   },
-  "dependsOn": ["solid-federation-vocab"],
+  "dependsOn": [
+    "solid-federation-vocab"
+  ],
   "federation": {
     "clientIdUrl": "https://pod-music.jeswr.org/clientid.jsonld",
-    "sectors": ["media"],
-    "accessModes": ["Read", "Write", "Append"],
-    "produces": ["media"],
-    "consumes": ["media"],
+    "sectors": [
+      "media"
+    ],
+    "accessModes": [
+      "Read",
+      "Write",
+      "Append"
+    ],
+    "produces": [
+      "media"
+    ],
+    "consumes": [
+      "media"
+    ],
     "membershipTodo": "Once fedapp: (https://w3id.org/jeswr/fed#) is frozen and the federation registry runs a signed challenge, register Pod Music as a media-sector App producing/consuming mo:Track / schema:MusicRecording / schema:ListenAction. Do not assert membership here."
+  },
+  "status": {
+    "generatedAt": "2026-07-03T05:14:28.294Z",
+    "commit": "e9896c22e485efea4d0f2496685c80e70335b5ec",
+    "gate": {
+      "lint": "skip",
+      "typecheck": "skip",
+      "test": "skip",
+      "build": "skip"
+    }
   }
 }
