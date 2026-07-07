@@ -8,6 +8,7 @@ import { ThemeProvider } from "@jeswr/app-shell";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App";
+import { AppErrorBoundary } from "./AppErrorBoundary";
 import { SessionProvider } from "./auth/SessionProvider";
 import "./styles.css";
 
@@ -25,7 +26,13 @@ createRoot(rootEl).render(
         the OKLCH tokens in styles.css). */}
     <ThemeProvider>
       <SessionProvider>
-        <App />
+        {/* Crash-resilience boundary (#72/#73 parity): INSIDE the Theme/Session
+            providers (the fallback themes; the resetKey reads the session) but
+            AROUND the routed content — a render error in <App/> shows the shared
+            themed <ErrorState> instead of white-screening. See AppErrorBoundary.tsx. */}
+        <AppErrorBoundary>
+          <App />
+        </AppErrorBoundary>
       </SessionProvider>
     </ThemeProvider>
   </StrictMode>,
